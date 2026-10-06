@@ -1,0 +1,15 @@
+# Local test hosts, credentials, logs and screenshots
+/.local/
+.env
+.env.*
+!.env.example
+
+# Dependencies and generated output
+node_modules/
+target/
+dist/
+artifacts/
+coverage/
+*.log
+.DS_Store
+Thumbs.db

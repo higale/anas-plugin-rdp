@@ -1,0 +1,26 @@
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const { ironrdp } = JSON.parse(readFileSync(resolve(root, 'upstream.lock.json'), 'utf8'));
+const targets = { 'win32-x64': 'x86_64-pc-windows-msvc', 'darwin-arm64': 'aarch64-apple-darwin', 'darwin-x64': 'x86_64-apple-darwin' };
+const target = targets[`${process.platform}-${process.arch}`];
+if (!target) throw new Error('Build tools are supported on Windows x64 and macOS arm64/x64.');
+execFileSync('rustup', ['toolchain', 'install', ironrdp.rustToolchain, '--profile', 'minimal', '--component', 'rustfmt,clippy', '--target', 'wasm32-unknown-unknown'], { stdio: 'inherit' });
+const name = `wasm-pack-v${ironrdp.wasmPack}-${target}`;
+const directory = resolve(root, '.local/tools');
+mkdirSync(directory, { recursive: true });
+const response = await fetch(`https://github.com/wasm-bindgen/wasm-pack/releases/download/v${ironrdp.wasmPack}/${name}.tar.gz`, { signal: AbortSignal.timeout(120000) });
+if (!response.ok) throw new Error(`wasm-pack download failed (${response.status}).`);
+const data = Buffer.from(await response.arrayBuffer());
+if (createHash('sha256').update(data).digest('hex') !== ironrdp.wasmPackSha256[target]) throw new Error('wasm-pack checksum mismatch.');
+const archive = resolve(directory, `${name}.tar.gz`);
+writeFileSync(archive, data);
+execFileSync(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-xzf', archive, '-C', directory], { stdio: 'inherit' });
+const binary = resolve(directory, name, `wasm-pack${process.platform === 'win32' ? '.exe' : ''}`);
+if (execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim() !== `wasm-pack ${ironrdp.wasmPack}`) throw new Error('Unexpected wasm-pack version.');
+if (process.env.GITHUB_ENV) appendFileSync(process.env.GITHUB_ENV, `WASM_PACK_PATH=${binary}\n`);
+console.log(`Verified wasm-pack: ${binary}`);

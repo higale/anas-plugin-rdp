@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Remote Desktop · 远程桌面</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<main>
+  <header><strong id="title">远程桌面</strong><span id="status" role="status" aria-live="polite">正在加载…</span></header>
+  <form id="connection">
+    <div class="target"><label><span data-label="host">地址</span><input id="host" required autocomplete="off" spellcheck="false"></label><label><span data-label="port">端口</span><input id="port" type="number" value="3389" min="1" max="65535" required></label></div>
+    <div class="pair"><label><span data-label="username">用户名</span><input id="username" required autocomplete="off" spellcheck="false"></label><label><span data-label="domain">域（可选）</span><input id="domain" autocomplete="off" spellcheck="false"></label></div>
+    <label><span data-label="password">密码</span><input id="password" type="password" autocomplete="off"></label>
+    <div class="actions"><button id="connect" type="submit" disabled>连接</button><button id="disconnect" type="button" disabled>断开</button></div>
+  </form>
+  <section id="trust" hidden><p id="trust-message"></p><code id="fingerprint"></code><div class="actions"><button id="accept-certificate" type="button">信任此证书并重试</button></div></section>
+  <div id="error" role="alert" hidden></div>
+  <section id="desktop" aria-label="Remote desktop"></section>
+  <footer id="hint">密码仅用于当前连接。每个页面拥有独立连接。</footer>
+</main>
+<script src="/_anas/sdk.js"></script><script type="module" src="app.js"></script>
+</body></html>

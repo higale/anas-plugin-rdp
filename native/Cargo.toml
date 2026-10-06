@@ -1,0 +1,24 @@
+[package]
+name = "anas-rdp-bridge"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+futures-util = { version = "0.3", features = ["sink"] }
+ironrdp-core = { git = "https://github.com/Devolutions/IronRDP.git", rev = "2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d" }
+ironrdp-pdu = { git = "https://github.com/Devolutions/IronRDP.git", rev = "2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d", features = ["std"] }
+ironrdp-rdcleanpath = { git = "https://github.com/Devolutions/IronRDP.git", rev = "2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d" }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+rustls-native-certs = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2.6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "process"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+tokio-tungstenite = "0.29"
+
+[dev-dependencies]
+rcgen = "0.14"
