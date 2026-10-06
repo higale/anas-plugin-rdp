@@ -10,6 +10,8 @@ import { release } from 'node:os';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packageDirectory = resolve(root, process.env.RDP_TEST_PACKAGE ?? 'dist');
+// Anas 3.3.2 selects a directory; 3.3.3+ selects a ZIP or PLUGIN.json.
+const installSource = resolve(root, process.env.RDP_TEST_INSTALL_SOURCE ?? packageDirectory);
 const host = resolve(root, '../Anas');
 const require = createRequire(join(host, 'package.json'));
 const { _electron: electron } = require('playwright');
@@ -21,6 +23,7 @@ const directory = await mkdtemp(join(root, '.local/anas-e2e-'));
 const revision = cwd => execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
 const metadata = { date: new Date().toISOString(), host_commit: revision(host), plugin_commit: revision(root), plugin_dirty: Boolean(execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim()), platform: process.platform, architecture: process.arch, os: release(), node: process.version, upstream: JSON.parse(await readFile(join(root, 'upstream.lock.json'), 'utf8')) };
 metadata.package_build = JSON.parse(await readFile(join(packageDirectory, 'BUILD.json'), 'utf8'));
+metadata.install_source_kind = installSource.toLowerCase().endsWith('.zip') ? 'zip' : installSource.toLowerCase().endsWith('.json') ? 'manifest' : 'directory';
 const env = { ...process.env, ANAS_SKIP_SINGLE_INSTANCE_LOCK: '1' };
 delete env.ELECTRON_RUN_AS_NODE;
 let app;
@@ -66,7 +69,7 @@ try {
   await app.evaluate(({ dialog, BrowserWindow }, source) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [source] });
     BrowserWindow.getAllWindows()[0].setSize(1360,850);
-  }, packageDirectory);
+  }, installSource);
   phase = 'install';
   await page.evaluate(() => globalThis.gale.plugins.install());
   await page.locator('.sidebar-settings').click();

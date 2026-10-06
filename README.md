@@ -10,7 +10,7 @@ Windows x64 已完成真实 Anas 中的认证、画面、基本键盘输入和�
 
 需要 Anas 3.3.2 或包含提交 `c2250c06` 的开发版本（插件 API 1、iframe 表单支持）。
 
-从 Anas「设置 → 插件」安装完整 `dist/` 文件夹，或先解压 [GitHub Releases](https://github.com/higale/anas-plugin-rdp/releases) 的 ZIP，再选择解压目录。下载通用 ZIP，同一目录可用于 Windows x64、Apple Silicon Mac 和 Intel Mac。证书不受系统信任时，独立核对 SHA-256 后按目标信任。密码只驻留内存，不写入普通配置或备份。详见[中英用户说明](docs/USER_GUIDE.md)。最终用户无需安装 Rust、Node 或编译工具。
+下载 [GitHub Releases](https://github.com/higale/anas-plugin-rdp/releases) 的通用 ZIP，同一包可用于 Windows x64、Apple Silicon Mac 和 Intel Mac。从 Anas「设置 → 插件」安装：Anas 3.3.3 起直接选择 ZIP，或选择完整解压目录中的 `PLUGIN.json`；Anas 3.3.2 先解压，再选择整个目录。开发构建使用完整 `dist/` 目录。证书不受系统信任时，独立核对 SHA-256 后按目标信任。密码只驻留内存，不写入普通配置或备份。详见[中英用户说明](docs/USER_GUIDE.md)。最终用户无需安装 Rust、Node 或编译工具。
 
 ## 开发
 

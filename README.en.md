@@ -10,7 +10,7 @@ Windows x64 has passed authentication, rendering, basic keyboard input, and conn
 
 Requires Anas 3.3.2 or a development build containing commit `c2250c06` (plugin API 1, iframe form support).
 
-Install the complete `dist/` folder from Anas Settings → Plugins, or extract a ZIP from [GitHub Releases](https://github.com/higale/anas-plugin-rdp/releases) first and select that folder. The universal ZIP works on Windows x64, Apple Silicon Macs, and Intel Macs from one directory. For certificates not trusted by the system, independently verify the SHA-256 before trusting that target. Passwords remain in memory and are excluded from ordinary settings and backups. See the [bilingual user guide](docs/USER_GUIDE.md). End users do not need Rust, Node, or build tools.
+Download the universal ZIP from [GitHub Releases](https://github.com/higale/anas-plugin-rdp/releases); the same package works on Windows x64, Apple Silicon Macs, and Intel Macs. Install from Anas Settings → Plugins: in Anas 3.3.3 or later, select the ZIP directly or select `PLUGIN.json` inside the complete extracted folder; in Anas 3.3.2, extract first and select the entire folder. Development builds use the complete `dist/` directory. For certificates not trusted by the system, independently verify the SHA-256 before trusting that target. Passwords remain in memory and are excluded from ordinary settings and backups. See the [bilingual user guide](docs/USER_GUIDE.md). End users do not need Rust, Node, or build tools.
 
 ## Development
 

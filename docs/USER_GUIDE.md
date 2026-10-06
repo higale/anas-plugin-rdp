@@ -5,7 +5,7 @@
 此版本为开发原型，已在 Windows x64 验证。macOS 尚未实机验证。
 需要 Anas 3.3.2 或包含提交 `c2250c06` 的开发版本（插件 API 1）。
 
-1. 在 Anas「设置 → 插件」中从文件夹安装完整构建目录；ZIP 包先解压，再选择解压目录。
+1. 在 Anas「设置 → 插件」安装：Anas 3.3.3 起直接选择 ZIP，或选择完整解压目录中的 `PLUGIN.json`；Anas 3.3.2 先解压，再选择整个目录。
 2. 在侧边页或独立窗口打开远程桌面，填写地址、端口、用户名、可选域和密码。
 3. 点击「连接」。证书不受系统信任时，先独立核对服务器证书 SHA-256，再选择信任并重试。证书变化会再次提示。
 4. 桌面区域内操作键鼠；点击「断开」结束连接，连接过程中可点击「取消」。
@@ -21,7 +21,7 @@
 This is a development prototype verified on Windows x64. macOS has not been tested on hardware.
 It requires Anas 3.3.2 or a development build containing commit `c2250c06` (plugin API 1).
 
-1. In Anas Settings → Plugins, install the complete build directory from a folder. Extract ZIP packages first, then select the extracted directory.
+1. Install from Anas Settings → Plugins. In Anas 3.3.3 or later, select the ZIP directly or select `PLUGIN.json` inside the complete extracted folder. In Anas 3.3.2, extract first and select the entire folder.
 2. Open Remote Desktop in a side panel or separate window. Enter the address, port, username, optional domain, and password.
 3. Select Connect. If the system does not trust the server certificate, independently verify its SHA-256 before accepting it and retrying. Certificate changes require confirmation again.
 4. Use the keyboard and mouse inside the desktop. Select Disconnect to end the session, or Cancel while connecting.
