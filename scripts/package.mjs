@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -39,6 +39,8 @@ const bytes = files.reduce((sum, item) => sum + item.bytes, 0);
 assert.ok(files.length <= 10000 && bytes <= 512 * 1024 * 1024);
 mkdirSync(resolve(root, 'artifacts'), { recursive: true });
 const archive = resolve(root, 'artifacts', `anas-rdp-${manifest.plugin_version}-${universal ? 'universal' : `${build.platform}-${build.architecture}`}.zip`);
+// zip updates existing archives; rebuild this exact output to exclude stale entries.
+if (existsSync(archive)) unlinkSync(archive);
 if (process.platform === 'win32') execFileSync('tar.exe', ['-a', '-c', '-f', archive, '-C', source, '.'], { stdio: 'inherit' });
 else if (process.platform === 'darwin') execFileSync('/usr/bin/ditto', ['-c', '-k', source, archive], { stdio: 'inherit' });
 else if (process.platform === 'linux' && universal) execFileSync('zip', ['-q', '-r', archive, '.'], { cwd: source, stdio: 'inherit' });

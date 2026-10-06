@@ -30,6 +30,7 @@ npm test
 npm run test:live
 npm run test:host
 npm run package
+npm run verify:package
 ```
 
 `test:live` 和 `test:host` 读取相邻 Anas 已安装的 Electron／Playwright 依赖；后者还需要已构建的 Anas。两个脚本使用独立测试环境，不修改个人配置；结果分别保存在 `.local/live-result.json` 和 `.local/host-result.json`。宿主测试记录实际提交、工作区状态、平台、架构及依赖版本，使用 Windows 进程查询审计本次测试目录中的 helper。不要把它直接当作 macOS 已验证的脚本。
@@ -65,9 +66,11 @@ git diff --check
 
 安装包只包含明确列出的 `dist/` 产物，不能从仓库根全量打包。`npm run package` 输出 SHA-256、逐文件清单和体积检查结果。
 
-## macOS 与进一步验收
+## 三平台 CI 与进一步验收
 
-macOS 需先完成原生构建，确认可执行权限、系统证书读取、WASM、loopback WebSocket，再重复真实宿主测试。当前尚无 macOS 实机结果，也未提供可称为已验证的 macOS 安装包。
+GitHub Actions 已在 Windows x64、macOS ARM64 和 macOS Intel 完成上游 137 项测试、插件类型检查、7 项 Rust 测试、clippy、构建、后台行为测试及独立 ZIP 校验。通用 ZIP 合并成功，并在三种 runner 上再次通过解压后逐文件摘要、WASM 编译和辅助程序启动／回收验证；macOS 同时验证可执行权限及 ad-hoc 签名。首轮完整记录见 [CI 37503477530](https://github.com/higale/anas-plugin-rdp/actions/runs/37503477530)。
+
+CI 使用合成目标，没有真实远程凭据。macOS 实际下载文件的系统拦截行为、系统证书读取、真实 RDP 认证与 Anas 界面交互仍由用户实机验证；构建与进程测试成功不能替代这些验收。
 
 后续验收包括：完整键鼠／中文输入、高 DPI、隐藏保活与焦点切换、多页面归属、网络中断后的状态一致性、长时间连接，以及各平台强制退出回收。所有未验证能力保留在 [待办](../TODO.md)，不能用 Windows 成功推断 macOS 成功。
 

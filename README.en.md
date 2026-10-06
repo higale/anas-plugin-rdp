@@ -4,7 +4,7 @@
 
 An optional Windows remote desktop plugin providing a real web desktop in an Anas side panel or separate window. It uses pinned IronRDP Web components, WASM, and a bundled native bridge, without a separately deployed gateway.
 
-The Windows x64 development prototype has passed authentication, rendering, basic keyboard input, and connection lifecycle checks inside Anas. macOS is a target client platform; its build and hardware validation are pending. Chinese input and full keyboard/mouse compatibility need dedicated verification. Clipboard, audio, file transfer, multiple displays, active session transfer, and password storage are not provided.
+Windows x64 has passed authentication, rendering, basic keyboard input, and connection lifecycle checks inside Anas. CI builds and checks of both platform-specific and universal packages have passed on Windows x64, Apple Silicon macOS, and Intel macOS; real macOS Anas/RDP interaction still awaits hardware acceptance testing. Chinese input and full keyboard/mouse compatibility need dedicated verification. Clipboard, audio, file transfer, multiple displays, active session transfer, and password storage are not provided.
 
 ## Usage
 
