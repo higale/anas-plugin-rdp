@@ -9,7 +9,9 @@ const { ironrdp } = JSON.parse(readFileSync(resolve(root, 'upstream.lock.json'),
 const targets = { 'win32-x64': 'x86_64-pc-windows-msvc', 'darwin-arm64': 'aarch64-apple-darwin', 'darwin-x64': 'x86_64-apple-darwin' };
 const target = targets[`${process.platform}-${process.arch}`];
 if (!target) throw new Error('Build tools are supported on Windows x64 and macOS arm64/x64.');
-execFileSync('rustup', ['toolchain', 'install', ironrdp.rustToolchain, '--profile', 'minimal', '--component', 'rustfmt,clippy', '--target', 'wasm32-unknown-unknown'], { stdio: 'inherit' });
+const nativeOnly = process.argv.includes('--native-only');
+execFileSync('rustup', ['toolchain', 'install', ironrdp.rustToolchain, '--profile', 'minimal', '--component', 'rustfmt,clippy', ...(nativeOnly ? [] : ['--target', 'wasm32-unknown-unknown'])], { stdio: 'inherit' });
+if (nativeOnly) process.exit(0);
 const name = `wasm-pack-v${ironrdp.wasmPack}-${target}`;
 const directory = resolve(root, '.local/tools');
 mkdirSync(directory, { recursive: true });

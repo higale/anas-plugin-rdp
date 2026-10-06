@@ -4,6 +4,8 @@ import { dirname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const scope = process.env.RDP_BUILD_COMPONENT ?? 'all';
+if (!['all', 'web', 'native'].includes(scope)) throw new Error('Invalid license scope.');
 const output = resolve(root, 'artifacts/licenses');
 // Only the generated notice directory is replaced; source notices stay in third-party.
 if (output !== resolve(root, 'artifacts/licenses')) throw new Error('Invalid notice directory.');
@@ -31,6 +33,7 @@ for (const [cwd, name, platform] of [
   [resolve(root, 'native'), 'anas-rdp-bridge', `${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}-${process.platform === 'win32' ? 'pc-windows-msvc' : 'apple-darwin'}`],
   [resolve(root, '.local/upstream/IronRDP'), 'ironrdp-web', 'wasm32-unknown-unknown'],
 ]) {
+  if ((scope === 'web' && name !== 'ironrdp-web') || (scope === 'native' && name === 'ironrdp-web')) continue;
   const metadata = JSON.parse(execFileSync('cargo', ['metadata', '--locked', '--format-version', '1', '--filter-platform', platform], { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
   const packages = new Map(metadata.packages.map(item => [item.id, item]));
   const nodes = new Map(metadata.resolve.nodes.map(item => [item.id, item]));
@@ -59,8 +62,10 @@ const visitNpm = name => {
   retain('npm', pkg, directory);
   for (const dependency of Object.keys(pkg.dependencies ?? {})) if (existsSync(resolve(npmRoot, dependency, 'package.json'))) visitNpm(dependency);
 };
-visitNpm('svelte');
-visitNpm('ua-parser-js');
+if (scope !== 'native') {
+  visitNpm('svelte');
+  visitNpm('ua-parser-js');
+}
 const entries = [...inventory.entries()].sort(([a], [b]) => a.localeCompare(b));
 writeFileSync(resolve(output, 'inventory.json'), JSON.stringify(Object.fromEntries(entries), null, 2) + '\n');
 const missing = entries.filter(([, item]) => !item.notices.length);

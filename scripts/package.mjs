@@ -9,13 +9,17 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const source = resolve(root, process.env.RDP_PACKAGE_DIRECTORY ?? 'dist');
 const build = JSON.parse(readFileSync(resolve(source, 'BUILD.json'), 'utf8'));
 const universal = build.platform === 'universal';
+const component = build.component ?? 'all';
+assert.ok(['all', 'web', 'native'].includes(component));
 if (!universal) {
   assert.equal(build.platform, process.platform);
   assert.equal(build.architecture, process.arch);
 }
-const manifest = JSON.parse(readFileSync(resolve(source, 'PLUGIN.json'), 'utf8'));
-assert.match(manifest.plugin_version, /^\d+\.\d+\.\d+$/);
-const topLevel = ['PLUGIN.json', 'BUILD.json', 'USER_GUIDE.md', 'app.js', 'backend.cjs', 'index.html', 'style.css', 'ironrdp_web_bg.wasm', 'native', 'third-party'];
+const version = component === 'native' ? build.version : JSON.parse(readFileSync(resolve(source, 'PLUGIN.json'), 'utf8')).plugin_version;
+assert.match(version, /^\d+\.\d+\.\d+$/);
+let topLevel = ['PLUGIN.json', 'BUILD.json', 'USER_GUIDE.md', 'app.js', 'backend.cjs', 'index.html', 'style.css', 'ironrdp_web_bg.wasm', 'native', 'third-party'];
+if (component === 'web') topLevel = topLevel.filter(name => name !== 'native');
+if (component === 'native') topLevel = ['BUILD.json', 'native', 'third-party'];
 assert.deepEqual(readdirSync(source).sort(), topLevel.sort(), 'Unexpected package content');
 const files = [];
 let entries = 0;
@@ -38,7 +42,8 @@ inspect(source);
 const bytes = files.reduce((sum, item) => sum + item.bytes, 0);
 assert.ok(files.length <= 10000 && bytes <= 512 * 1024 * 1024);
 mkdirSync(resolve(root, 'artifacts'), { recursive: true });
-const archive = resolve(root, 'artifacts', `anas-rdp-${manifest.plugin_version}-${universal ? 'universal' : `${build.platform}-${build.architecture}`}.zip`);
+const variant = universal ? 'universal' : component === 'web' ? 'web' : `${component === 'native' ? 'native-' : ''}${build.platform}-${build.architecture}`;
+const archive = resolve(root, 'artifacts', `anas-rdp-${version}-${variant}.zip`);
 // zip updates existing archives; rebuild this exact output to exclude stale entries.
 if (existsSync(archive)) unlinkSync(archive);
 if (process.platform === 'win32') execFileSync('tar.exe', ['-a', '-c', '-f', archive, '-C', source, '.'], { stdio: 'inherit' });

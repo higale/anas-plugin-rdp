@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -34,8 +34,17 @@ if (process.platform === 'darwin') {
   execFileSync('/usr/bin/codesign', ['--verify', '--strict', helper], { stdio: 'inherit' });
 }
 const manifest = JSON.parse(readFileSync(resolve(extracted, 'PLUGIN.json'), 'utf8'));
+const build = JSON.parse(readFileSync(resolve(extracted, 'BUILD.json'), 'utf8'));
+assert.deepEqual(build, inventory.build);
+assert.equal(build.version, version);
+if (variant === 'universal') {
+  assert.equal(build.platform, 'universal');
+  assert.equal(build.shared_assets_from, 'web');
+  assert.deepEqual(readdirSync(resolve(extracted, 'native')).sort(), ['darwin-arm64', 'darwin-x64', 'win32-x64']);
+  assert.deepEqual(manifest.platforms.sort(), ['darwin', 'win32']);
+}
 assert.ok(manifest.platforms.includes(process.platform));
 assert.equal(manifest.plugin_version, version);
 await WebAssembly.compile(readFileSync(resolve(extracted, 'ironrdp_web_bg.wasm')));
 execFileSync(process.execPath, ['--test', 'test/backend.test.mjs'], { cwd: root, stdio: 'inherit', env: { ...process.env, RDP_TEST_PACKAGE: extracted } });
-console.log(`Verified ${inventory.files.length} archived files and native process lifecycle after extraction.`);
+console.log(`Verified ${inventory.files.length} archived files and native process lifecycle after extraction: ${extracted}`);

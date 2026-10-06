@@ -3,7 +3,7 @@
 ## 简体中文
 
 此版本为开发原型，已在 Windows x64 验证。macOS 尚未实机验证。
-需要包含提交 `c2250c06` 的 Anas 开发版本（插件 API 1）；仅正式版本号 3.3.1 不足以判断是否包含所需表单修复。
+需要 Anas 3.3.2 或包含提交 `c2250c06` 的开发版本（插件 API 1）。
 
 1. 在 Anas「设置 → 插件」中从文件夹安装完整构建目录；ZIP 包先解压，再选择解压目录。
 2. 在侧边页或独立窗口打开远程桌面，填写地址、端口、用户名、可选域和密码。
@@ -14,12 +14,12 @@
 
 此版本提供画面、基本键鼠、窗口适配、证书信任和连接回收。剪贴板、声音、文件传输、多显示器、活动会话跨窗口转移及保存密码尚未提供。中文输入和全部组合键的支持范围仍需专项验证。
 
-安装包已包含 Web 组件、WASM、原生辅助程序和第三方声明，用户无需安装 Rust 或 Node。推荐通用 ZIP，它包含 Windows x64、macOS Apple Silicon 和 Intel 三种辅助程序并自动选择；较小的独立平台包只适用于指定操作系统及架构。macOS 辅助程序采用 ad-hoc 签名，未经过 Apple 公证。
+安装包已包含 Web 组件、WASM、原生辅助程序和第三方声明，用户无需安装 Rust 或 Node。通用 ZIP 包含 Windows x64、macOS Apple Silicon 和 Intel 三种辅助程序并自动选择。macOS 辅助程序采用 ad-hoc 签名，未经过 Apple 公证。
 
 ## English
 
 This is a development prototype verified on Windows x64. macOS has not been tested on hardware.
-It requires an Anas development build containing commit `c2250c06` (plugin API 1). The application version 3.3.1 alone does not identify the required form fix.
+It requires Anas 3.3.2 or a development build containing commit `c2250c06` (plugin API 1).
 
 1. In Anas Settings → Plugins, install the complete build directory from a folder. Extract ZIP packages first, then select the extracted directory.
 2. Open Remote Desktop in a side panel or separate window. Enter the address, port, username, optional domain, and password.
@@ -30,4 +30,4 @@ The address, account, domain, and certificate fingerprints approved per target a
 
 This version provides desktop rendering, basic keyboard/mouse input, scaling, certificate trust, and connection cleanup. Clipboard, audio, file transfer, multiple displays, moving active sessions between windows, and password storage are not provided. Chinese input and full shortcut coverage still require dedicated verification.
 
-The package includes Web components, WASM, native helpers, and third-party notices. End users do not need Rust or Node. The recommended universal ZIP includes Windows x64, Apple Silicon macOS, and Intel macOS helpers selected automatically at runtime; smaller platform packages only work on their specified operating system and architecture. macOS helpers are ad-hoc signed and are not notarized by Apple.
+The package includes Web components, WASM, native helpers, and third-party notices. End users do not need Rust or Node. The universal ZIP includes Windows x64, Apple Silicon macOS, and Intel macOS helpers selected automatically at runtime. macOS helpers are ad-hoc signed and are not notarized by Apple.

@@ -1,27 +1,31 @@
-# Anas RDP v0.1.1
+# Anas RDP v0.1.2
 
 ## 简体中文
 
-首次公开预览版：使用 IronRDP Web/WASM 和随包原生桥接，在 Anas 侧边页或独立窗口连接 Windows 远程桌面。支持连接、取消、断开、按目标确认 TLS 证书、画面适配及基本键鼠；密码不写入普通配置。
+完成插件前后台、原生桥接、连接生命周期、构建发布和依赖使用范围审核，修复以下问题并精简下载项：
 
-- 推荐下载 `anas-rdp-0.1.1-universal.zip`，同一目录包含 Windows x64、macOS Apple Silicon 和 macOS Intel 的辅助程序，运行时自动选择；同时提供体积更小的三个独立包。
-- ZIP 解压后，在 Anas「设置 → 插件」从文件夹安装完整目录。无需安装 Rust 或 Node。
-- 需要包含开发提交 `c2250c06` 的 Anas（插件 API 1、iframe 表单支持）。当前 GitHub 上的 Anas 3.3.1 发布包尚未包含此修复；本次插件发布不替代宿主更新。
-- 三平台 CI 校验构建、原生传输测试、ZIP 内容、WASM 编译与解压后的辅助程序启动／回收；通用包在三种 runner 上再次验证。macOS 使用 ad-hoc 签名，未进行 Apple 公证。
-- Windows 真实 Anas 认证、画面、证书和生命周期测试已通过。macOS 的真实 RDP／Anas 交互仍待用户实机验收；CI 通过不代表远程连接验收通过。
-- 中文输入、完整键鼠兼容性和长期稳定性仍需专项验证；剪贴板、音频、文件传输、多显示器、会话转移及保存密码暂不提供。
+- 修复旧连接的延迟错误干扰新连接，以及保存配置期间取消仍启动辅助程序的问题。
+- 损坏的证书信任配置不再阻断初始化；保存信任失败会显示错误，不会按未保存的信任继续连接。
+- 回环 WebSocket 使用动态端口范围并处理占用，避免系统分配的端口被 Chromium 拦截。
+- 公共 UI、JS 和 WASM 只构建一次；仅 native 分 Windows x64、macOS ARM64、macOS x64 构建。最终仅提供一个通用 ZIP 和 SHA256SUMS.txt。逐文件清单与组件包保留在 Actions，构建来源与许可证仍在 ZIP 内。
 
-校验值见 `SHA256SUMS.txt`，各 ZIP 附有逐文件清单与构建来源。
+下载 anas-rdp-0.1.2-universal.zip，解压后从 Anas「设置 → 插件」安装完整目录。三种平台使用同一个 ZIP，无需安装 Rust 或 Node。需要 Anas 3.3.2 或包含提交 c2250c06 的开发版本（插件 API 1、iframe 表单支持）。
+
+新增 4 项界面回归测试，原生测试增至 8 项。Windows 真实 Anas 的认证、画面、证书、取消及退出回收测试通过；发布流程要求通用 ZIP 在三个平台完成内容、WASM、辅助程序启动／回收验证。macOS 辅助程序使用 ad-hoc 签名，未公证；实际 macOS RDP／Anas 交互仍由用户实机验证。固定上游的依赖告警及当前适用范围见 docs/TESTING.md，不声明依赖扫描全部清零。
+
+仍为预览版。中文输入、完整键鼠兼容性和长期稳定性待专项验证；暂不提供剪贴板、音频、文件传输、多显示器、会话转移和保存密码。GitHub 自动提供的两项 Source code 下载属于源码，不是插件安装包。
 
 ## English
 
-First public preview: connect to a Windows remote desktop from an Anas side panel or separate window using IronRDP Web/WASM and bundled native bridges. Includes connect/cancel/disconnect, target-bound TLS certificate trust, scaling, and basic keyboard/mouse input. Passwords are excluded from ordinary settings.
+Reviewed the plugin UI and backend, native bridge, connection lifecycle, build/release pipeline, and dependency usage. This release fixes the following issues and simplifies downloads:
 
-- Prefer `anas-rdp-0.1.1-universal.zip`: one directory contains helpers for Windows x64, Apple Silicon macOS, and Intel macOS, selected automatically at runtime. Three smaller platform packages are also provided.
-- Extract the ZIP and install the complete folder from Anas Settings → Plugins. Rust and Node are not required for end users.
-- Requires Anas containing development commit `c2250c06` (plugin API 1, iframe form support). The current Anas 3.3.1 GitHub release does not contain this fix; this plugin release does not update the host.
-- CI checks all three builds, native transport tests, archive contents, WASM compilation, and helper startup/cleanup after extraction. The universal package is checked again on all three runners. macOS helpers are ad-hoc signed and are not notarized by Apple.
-- Authentication, rendering, certificate handling, and lifecycle behavior were tested in Anas on Windows. Real macOS RDP/Anas interaction awaits user hardware validation; CI success is not a remote connection acceptance test.
-- Chinese input, full keyboard/mouse compatibility, and long-term stability require further validation. Clipboard, audio, file transfer, multiple displays, session transfer, and password storage are not included.
+- Late errors from an old connection no longer interfere with a new connection. Cancelling while settings are being saved no longer starts a helper afterward.
+- Malformed certificate trust settings no longer block initialization. Trust persistence failures are shown to the user and do not start a connection using unsaved trust.
+- The loopback WebSocket uses the dynamic port range with collision handling, avoiding ports blocked by Chromium.
+- Shared UI, JavaScript, and WASM are built once; only native helpers are built separately for Windows x64, macOS ARM64, and macOS x64. Releases provide one universal ZIP and SHA256SUMS.txt. File inventories and component archives stay in Actions; build provenance and licenses remain inside the ZIP.
 
-See `SHA256SUMS.txt` for checksums. Each ZIP includes an accompanying file inventory and build provenance.
+Download anas-rdp-0.1.2-universal.zip, extract it, and install the complete folder from Anas Settings → Plugins. The same ZIP serves all three platforms. Rust and Node are not required. Requires Anas 3.3.2 or a development build containing commit c2250c06 (plugin API 1, iframe form support).
+
+Added 4 UI regression tests, bringing native tests to 8. Authentication, rendering, certificates, cancellation, and process cleanup passed in Anas on Windows. Publication requires the universal ZIP to pass content, WASM, and helper startup/cleanup checks on all three platforms. macOS helpers are ad-hoc signed and are not notarized; real macOS RDP/Anas interaction still awaits user hardware validation. See docs/TESTING.md for pinned upstream dependency advisories and applicability; this is not a claim of zero dependency findings.
+
+This remains a preview. Chinese input, full keyboard/mouse compatibility, and long-term stability need dedicated verification. Clipboard, audio, file transfer, multiple displays, session transfer, and password storage are not included. GitHub's two automatic Source code downloads contain source code, not an installable plugin.

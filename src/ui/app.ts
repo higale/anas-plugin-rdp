@@ -27,15 +27,17 @@ let trusts: Trust[] = [];
 let pendingTrust: Trust | undefined;
 let connecting = false;
 let connected = false;
+let savingTrust = false;
 let zh = true;
 const message = (cn: string, en: string) => zh ? cn : en;
 function status(cn: string, en: string) { element('status').textContent = message(cn, en); }
 function failure(cn: string, en: string) { element('error').hidden = false; element('error').textContent = message(cn, en); }
 function controls() {
-  input('connect').disabled = connecting || connected;
+  input('connect').disabled = connecting || connected || savingTrust;
   input('disconnect').disabled = !connecting && !connected;
   input('disconnect').textContent = connecting ? message('取消', 'Cancel') : message('断开', 'Disconnect');
-  for (const id of ['host', 'port', 'username', 'domain', 'password']) input(id).disabled = connecting || connected;
+  input('accept-certificate').disabled = connecting || connected || savingTrust;
+  for (const id of ['host', 'port', 'username', 'domain', 'password']) input(id).disabled = connecting || connected || savingTrust;
   document.body.dataset.connected = String(connected);
 }
 function target(): Target { return { host: input('host').value.trim(), port: Number(input('port').value), username: input('username').value, domain: input('domain').value }; }
@@ -80,7 +82,7 @@ async function makeDesktop(): Promise<UserInteraction> {
   return ready;
 }
 async function connect() {
-  if (connecting || connected) return;
+  if (connecting || connected || savingTrust) return;
   const current = target();
   const password = input('password').value;
   const mine = ++generation;
@@ -93,6 +95,7 @@ async function connect() {
   let poll: ReturnType<typeof setInterval> | undefined;
   try {
     await window.anas.data.set('connection', current);
+    if (generation !== mine) return;
     const trustedSha256 = trusts.find(item => item.host === current.host && item.port === current.port)?.sha256;
     const created = await window.anas.backend.call('create', { owner, host: current.host, port: current.port, trustedSha256 }) as Bridge;
     if (generation !== mine) { await window.anas.backend.call('disconnect', { owner, id: created.id }); return; }
@@ -126,6 +129,7 @@ async function connect() {
   } catch {
     if (generation !== mine) return;
     const info = bridge ? await window.anas.backend.call('status', { owner, id: bridge.id }).catch(() => null) as BridgeStatus | null : null;
+    if (generation !== mine) return;
     if (info?.state === 'certificate_required' && info.certificate) {
       pendingTrust = { host: current.host, port: current.port, sha256: info.certificate.sha256 };
       element('fingerprint').textContent = pendingTrust.sha256;
@@ -140,10 +144,19 @@ element('connection').addEventListener('submit', event => { event.preventDefault
 element('disconnect').addEventListener('click', () => void disconnect());
 element('accept-certificate').addEventListener('click', async () => {
   const current = target();
-  if (!pendingTrust || pendingTrust.host !== current.host || pendingTrust.port !== current.port) return;
-  trusts = trusts.filter(item => item.host !== current.host || item.port !== current.port);
-  trusts.push(pendingTrust);
-  await window.anas.data.set('certificate_trust', trusts);
+  if (savingTrust || connecting || connected || !pendingTrust || pendingTrust.host !== current.host || pendingTrust.port !== current.port) return;
+  const mine = generation;
+  const nextTrusts = [...trusts.filter(item => item.host !== current.host || item.port !== current.port), pendingTrust];
+  savingTrust = true;
+  controls();
+  try {
+    await window.anas.data.set('certificate_trust', nextTrusts);
+    trusts = nextTrusts;
+  } catch {
+    failure('证书信任保存失败，请重试。', 'Could not save certificate trust. Try again.');
+    return;
+  } finally { savingTrust = false; controls(); }
+  if (generation !== mine) return;
   await connect();
 });
 window.addEventListener('pagehide', () => { try { ui?.shutdown(); } catch { /* Page teardown closes its WebSocket. */ } });
@@ -163,7 +176,7 @@ try {
   const saved = await window.anas.data.get('connection') as Partial<Target> | null;
   if (saved) for (const key of ['host', 'port', 'username', 'domain'] as const) if (saved[key] !== undefined) input(key).value = String(saved[key]);
   const savedTrust = await window.anas.data.get('certificate_trust');
-  if (Array.isArray(savedTrust)) trusts = savedTrust.filter(item => typeof item.host === 'string' && Number.isInteger(item.port) && /^[a-f0-9]{64}$/.test(item.sha256));
+  if (Array.isArray(savedTrust)) trusts = savedTrust.filter(item => item && typeof item === 'object' && typeof item.host === 'string' && item.host.length > 0 && Number.isInteger(item.port) && item.port > 0 && item.port <= 65535 && typeof item.sha256 === 'string' && /^[a-f0-9]{64}$/.test(item.sha256));
   await init('OFF');
   status('未连接', 'Disconnected');
   controls();

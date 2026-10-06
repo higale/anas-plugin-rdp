@@ -2,12 +2,13 @@
 
 ## 已完成的 Windows x64 验证
 
-宿主基线为 Anas `c2250c06`（3.3.1、插件 API 1），IronRDP 为 `upstream.lock.json` 固定提交，Node 24.19.0、Rust 1.94.1。以下结果来自实际执行，不代表 macOS 已支持。
+本轮真实宿主基线为 Anas `c6dc6589`（3.3.2、插件 API 1），IronRDP 为 `upstream.lock.json` 固定提交，Node 24.19.0、Rust 1.94.1。以下结果来自实际执行，不能代替 macOS 实机验收。
 
 | 检查 | 实际结果 |
 | --- | --- |
 | 上游 | WASM、两个 Web 包构建和类型检查通过，137 项测试通过 |
-| 原生桥接 | 7 项单元／进程测试，rustfmt、clippy、release 构建通过 |
+| 原生桥接 | 8 项单元／进程测试，rustfmt、clippy、release 构建通过；包含浏览器可用端口范围及占用重试 |
+| 界面回归 | 4 项实际 app.ts 回归通过：旧连接错误隔离、保存配置中取消、损坏信任配置、信任保存失败 |
 | 插件后台 | 页面归属、幂等断开、无效目标拒绝、后台强制退出后 helper 回收通过 |
 | 最小 Electron | 真实认证、桌面像素、鼠标移动／Shift 发送、断开后退出通过 |
 | 真实 Anas | 从完整目录安装；侧边页和独立窗口认证、桌面像素通过；插件内无 window.gale |
@@ -27,13 +28,14 @@
 ```powershell
 npm run typecheck
 npm test
+npm run test:ui
 npm run test:live
 npm run test:host
 npm run package
 npm run verify:package
 ```
 
-`test:live` 和 `test:host` 读取相邻 Anas 已安装的 Electron／Playwright 依赖；后者还需要已构建的 Anas。两个脚本使用独立测试环境，不修改个人配置；结果分别保存在 `.local/live-result.json` 和 `.local/host-result.json`。宿主测试记录实际提交、工作区状态、平台、架构及依赖版本，使用 Windows 进程查询审计本次测试目录中的 helper。不要把它直接当作 macOS 已验证的脚本。
+`test:live` 和 `test:host` 读取相邻 Anas 已安装的 Electron／Playwright 依赖；后者还需要已构建的 Anas。两个脚本使用独立测试环境，不修改个人配置；结果分别保存在 `.local/live-result.json` 和 `.local/host-result.json`。宿主测试记录实际提交、工作区状态、平台、架构、依赖版本及安装包 BUILD.json；可用 `RDP_TEST_PACKAGE` 指向已解压的发布包，默认安装 `dist/`。使用 Windows 进程查询审计本次测试目录中的 helper，不要直接当作 macOS 已验证的脚本。
 
 真实连接测试只使用已经核对的目标证书信任，不自动接受未知证书或新指纹。异常退出必须终止 Electron `process.pid` 对应的实际主进程；Windows 下 Playwright 启动器 PID 可能不同。测试不录屏，外观截图在填写真实资料之前生成。
 
@@ -68,11 +70,28 @@ git diff --check
 
 ## 三平台 CI 与进一步验收
 
-GitHub Actions 已在 Windows x64、macOS ARM64 和 macOS Intel 完成上游 137 项测试、插件类型检查、7 项 Rust 测试、clippy、构建、后台行为测试及独立 ZIP 校验。通用 ZIP 合并成功，并在三种 runner 上再次通过解压后逐文件摘要、WASM 编译和辅助程序启动／回收验证；macOS 同时验证可执行权限及 ad-hoc 签名。首轮完整记录见 [CI 37503477530](https://github.com/higale/anas-plugin-rdp/actions/runs/37503477530)。
+v0.1.1 的 Windows x64、macOS ARM64 和 macOS Intel 构建与通用包验证已通过，首轮记录见 [CI 37503477530](https://github.com/higale/anas-plugin-rdp/actions/runs/37503477530)。v0.1.2 起公共 Web/WASM 与 JavaScript 只构建一次，运行上游 137 项测试、类型检查和 4 项界面回归；三个 native job 分别运行 8 项 Rust 测试、clippy 和原生构建。最终通用 ZIP 在三种 runner 上解压，检查逐文件摘要、三份 helper、WASM 编译及后台／辅助程序启动回收；macOS 同时验证可执行权限及 ad-hoc 签名。具体版本以该标签对应的 Actions 结果为准。
 
 CI 使用合成目标，没有真实远程凭据。macOS 实际下载文件的系统拦截行为、系统证书读取、真实 RDP 认证与 Anas 界面交互仍由用户实机验证；构建与进程测试成功不能替代这些验收。
 
 后续验收包括：完整键鼠／中文输入、高 DPI、隐藏保活与焦点切换、多页面归属、网络中断后的状态一致性、长时间连接，以及各平台强制退出回收。所有未验证能力保留在 [待办](../TODO.md)，不能用 Windows 成功推断 macOS 成功。
+
+## 2026-10-07 全项目审核
+
+范围覆盖本仓库前后台、原生桥接、会话归属与进程清理、证书和凭据处理、构建／打包／发布脚本、许可证和文档，并核对固定上游在本插件中的使用路径；不等同于逐行审计全部第三方源码。
+
+已修复五项问题：取消／重连后旧状态查询污染新会话；保存配置期间取消仍创建 helper；损坏信任列表阻断初始化；证书信任保存失败未处理且内存提前更新；系统分配的回环端口被 Chromium 拦截。前四项先复现回归失败再修复，端口问题在真实 Anas 中复现，修复后重跑完整宿主测试通过。
+
+依赖扫描使用 npm 官方 registry 与 cargo-audit 0.22.2。扫描结果按实际编译目标和调用方式复核：
+
+| 范围 | 结果与适用范围 |
+| --- | --- |
+| 本仓库 npm 与原生 Rust | npm 扫描无漏洞项；native/Cargo.lock 无漏洞或维护告警 |
+| 上游两个 Web 包 | 完整 lock 扫描分别有 26、19 个受影响依赖条目，包括重复的传递依赖；多数涉及 Vite 开发／预览服务、Vitest UI 服务和构建工具。本流程仅处理固定源码，执行 build 与非交互测试，安装包不携带这些工具或服务 |
+| 随包 Svelte 5.20.5 | 保留 SSR 与 DOM clobbering 类告警。当前仅客户端渲染，远端画面进入 canvas，不接收外部 HTML；没有 SSR、任意 HTML 插入或启用剪贴板／文件传输的路径。该适用性判断不是漏洞已修复的声明，仍跟踪上游升级 |
+| 上游 Rust 工作区 | 完整 Cargo.lock 有 9 条漏洞记录，其中 8 条不在 ironrdp-web 的 wasm32 普通／构建依赖图。实际 WASM 图包含 rsa 的 [RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071.html)，上游暂无修复。该告警针对 RSA 私钥操作的计时侧信道；本插件采用密码／NTLM CredSSP，未配置智能卡、客户端 RSA 私钥或 KDC proxy，TLS 由 native rustls 处理，当前连接路径未使用相关私钥操作 |
+
+原始扫描结果和依赖图保存在忽略的 `.local/audit/`；不随包分发。新增认证方式、SSR／外部 HTML、剪贴板或文件功能前须重新评估，不能把当前路径结论扩展到未提供的功能。
 
 ## 宿主回归
 

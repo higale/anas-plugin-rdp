@@ -4,10 +4,10 @@
 
 ## 依赖与构建
 
-- Anas 需要包含提交 `c2250c06`，正式版本仍为 3.3.1，插件 API 仍为 1。该提交为 iframe 增加 `allow-forms`，使表单校验、点击及 Enter 触发的脚本提交可用；CSP `form-action 'none'` 仍阻止表单网络提交。仅版本号不足以判断是否包含修复。
+- Anas 3.3.2 已包含提交 `c2250c06`，插件 API 仍为 1。该提交为 iframe 增加 `allow-forms`，使表单校验、点击及 Enter 触发的脚本提交可用；CSP `form-action 'none'` 仍阻止表单网络提交。使用开发版本时须确认包含该提交。
 - [IronRDP](https://github.com/Devolutions/IronRDP) 固定为 `2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d`，见 `upstream.lock.json`。原生依赖使用 `native/Cargo.lock`，两个 Web 包沿用固定提交中的 npm 锁文件。
 - 工具链为 Rust 1.94.1、`wasm32-unknown-unknown` target、wasm-pack 0.15.0、Node.js 24；本机验证 Node 24.19.0。辅助程序按本机操作系统和 CPU 架构构建，拒绝 Node 与 Rust 主机架构不一致的构建。
-- 许可证原文及声明在 `third-party/`。构建时收集依赖版本、许可证和原始通知，清单同时包含构建依赖，不代表每项均链接到运行时。部分发布包缺失的许可证从其精确源码提交补齐，来源见 `license-supplements/sources.json`。
+- 许可证原文及声明在 `third-party/`。构建时收集依赖版本、许可证和原始通知，清单同时包含构建依赖，不代表每项均链接到运行时。部分发布包缺失的许可证从其精确源码提交补齐，来源见 `third-party/license-supplements/sources.json`。
 
 ```powershell
 npm ci
@@ -26,7 +26,7 @@ npm run verify:package
 
 `package` 核对产物范围及宿主大小限制，生成平台／架构 ZIP、SHA-256 和文件清单。`verify:package` 解压后核对逐文件摘要、WASM 编译及辅助程序生命周期，macOS 另检查可执行权限和 ad-hoc 签名。ZIP 先解压再安装。`BUILD.json` 记录源码提交及工作区状态、平台、工具版本和依赖锁摘要。Windows x64 完整目录约 13.2 MiB；其他平台不能借用 Windows 辅助程序。
 
-GitHub 工作流在三个平台分别构建并检查，再合并共享 Web/WASM 与三个原生程序，生成通用 ZIP；合并时核对源码及依赖锁、保留全部许可证，并在三个平台重新验证通用包。详见[源码快照与构建流程](SOURCE_PUBLISHING.md)。开发者可运行 `node scripts/setup-build-tools.mjs` 安装固定 Rust 组件并下载校验 wasm-pack；脚本需要预先安装 rustup，非 CI 环境需将输出路径设置为 `WASM_PACK_PATH`。
+GitHub 工作流只构建一次共享 Web/WASM 与 JavaScript，在三个平台分别构建并检查原生程序，再合并生成通用 ZIP；合并时核对源码及依赖锁、保留全部许可证，并在三个平台重新验证通用包。详见[源码快照与构建流程](SOURCE_PUBLISHING.md)。开发者可运行 `node scripts/setup-build-tools.mjs` 安装固定 Rust 组件并下载校验 wasm-pack；脚本需要预先安装 rustup，非 CI 环境需将输出路径设置为 `WASM_PACK_PATH`。
 
 ## 实际架构
 
@@ -47,7 +47,7 @@ Windows RDP 服务
 
 后台最多管理四条连接，每页使用独立 owner 和连接 ID。创建只等待辅助程序准备好入口；认证及持续桌面数据走 WebSocket，不占用长时间 RPC。
 
-辅助程序绑定随机 loopback 端口，限定 `anas-plugin://rdp` 来源与 `/rdp` 路径。随机票据采用常量时间比较并绑定目标；拒绝客户端替换目标、提交服务器认证或任意预连接数据。入口 30 秒失效，单次 WebSocket 握手 3 秒，RDCleanPath 请求上限 64 KiB，二进制消息上限 1 MiB；协商及 TLS 总期限 15 秒，写入期限 10 秒。持续流分块、有背压，并用 ping/pong 检查存活。
+辅助程序绑定动态／私有端口范围（49152–65535）的 loopback 端口，避开浏览器禁止的低端口；碰到占用或系统保留区间会有界重试。限定 `anas-plugin://rdp` 来源与 `/rdp` 路径。随机票据采用常量时间比较并绑定目标；拒绝客户端替换目标、提交服务器认证或任意预连接数据。入口 30 秒失效，单次 WebSocket 握手 3 秒，RDCleanPath 请求上限 64 KiB，二进制消息上限 1 MiB；协商及 TLS 总期限 15 秒，写入期限 10 秒。持续流分块、有背压，并用 ping/pong 检查存活。
 
 TLS 默认校验系统信任及名称。不受信任的证书先拒绝并显示 SHA-256，用户独立核对后按主机和端口固定叶证书。已有指纹变化时再次拒绝，不能退回系统信任绕过固定指纹。TLS 签名仍由 rustls 校验，不全局跳过证书验证。
 

@@ -36,6 +36,38 @@ fn emit(value: serde_json::Value) {
     let _ = stdout.flush();
 }
 
+async fn bind_dynamic_listener(seed: u16) -> std::io::Result<TcpListener> {
+    // Browser-restricted ports are below the IANA dynamic/private range.
+    // Spread bounded retries across that range to avoid reserved Windows blocks.
+    for attempt in 0..128u32 {
+        let port = 49152 + ((u32::from(seed) + attempt * 7919) % 16384) as u16;
+        match TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await {
+            Ok(listener) => return Ok(listener),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
+                ) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AddrNotAvailable,
+        "no browser-compatible loopback port available",
+    ))
+}
+
+async fn bind_browser_listener() -> std::io::Result<TcpListener> {
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let port = listener.local_addr()?.port();
+    if port >= 49152 {
+        return Ok(listener);
+    }
+    // OS ephemeral port ranges can be customized and include blocked ports (6566).
+    drop(listener);
+    bind_dynamic_listener(port).await
+}
+
 pub async fn run() -> anyhow::Result<()> {
     let mut stdin = std::io::BufReader::new(std::io::stdin());
     let mut line = String::new();
@@ -89,7 +121,7 @@ async fn serve(
     config: Config,
     observation: Arc<Mutex<Option<CertificateObservation>>>,
 ) -> anyhow::Result<()> {
-    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let listener = bind_browser_listener().await?;
     emit(serde_json::json!({"status":"ready","port":listener.local_addr()?.port()}));
     let mut ws = timeout(Duration::from_secs(30), async {
         loop {
@@ -258,6 +290,18 @@ fn authorize(request: RDCleanPathPdu, config: &Config) -> anyhow::Result<Vec<u8>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn loopback_ports_avoid_browser_blocks_and_retry_collisions() {
+        let first = bind_dynamic_listener(6566).await.unwrap();
+        let port = first.local_addr().unwrap().port();
+        let second = bind_dynamic_listener(port - 49152).await.unwrap();
+        for listener in [&first, &second] {
+            assert!(listener.local_addr().unwrap().ip().is_loopback());
+            assert!(listener.local_addr().unwrap().port() >= 49152);
+        }
+        assert_ne!(first.local_addr().unwrap(), second.local_addr().unwrap());
+    }
 
     #[test]
     fn ticket_is_bound_to_destination_and_rejects_alternate_protocols() {
