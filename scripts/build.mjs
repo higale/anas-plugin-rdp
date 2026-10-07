@@ -29,7 +29,8 @@ if (component !== 'native') {
   for (const name of ['index.html', 'style.css']) cpSync(resolve(root, 'src/ui', name), resolve(out, name));
   cpSync(resolve(root, 'third-party'), resolve(out, 'third-party'), { recursive: true });
   cpSync(resolve(root, 'docs/USER_GUIDE.md'), resolve(out, 'USER_GUIDE.md'));
-  writeFileSync(resolve(out, 'PLUGIN.json'), JSON.stringify({ version: 0, id: 'rdp', name: 'Remote Desktop / 远程桌面', plugin_version: version, api_version: 1, platforms: component === 'web' ? ['win32', 'darwin'] : [process.platform], ui: 'index.html', backend: 'backend.cjs' }, null, 2) + '\n');
+  cpSync(resolve(root, 'lang'), resolve(out, 'lang'), { recursive: true });
+  writeFileSync(resolve(out, 'PLUGIN.json'), JSON.stringify({ version: 0, id: 'rdp', name: 'Remote Desktop', lang: 'lang', home: { default_location: 'sidebar', locations: ['sidebar', 'window'] }, plugin_version: version, api_version: 1, platforms: component === 'web' ? ['win32', 'darwin'] : [process.platform], ui: 'index.html', backend: 'backend.cjs' }, null, 2) + '\n');
 }
 if (component !== 'web') {
   const binary = `anas-rdp-bridge${process.platform === 'win32' ? '.exe' : ''}`;
@@ -43,5 +44,5 @@ if (component !== 'web') {
 }
 cpSync(resolve(root, 'artifacts/licenses'), resolve(out, 'third-party/dependencies'), { recursive: true });
 const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
-writeFileSync(resolve(out, 'BUILD.json'), JSON.stringify({ version, component, plugin_commit: git('rev-parse', 'HEAD'), dirty: Boolean(git('status', '--porcelain')), platform: process.platform, architecture: process.arch, native_target: component === 'web' ? null : nativeTarget, node: process.version, rust: rustInfo.split(/\r?\n/)[0], host_dependency: 'c2250c06', upstream: JSON.parse(readFileSync(resolve(root, 'upstream.lock.json'), 'utf8')), locks_sha256: Object.fromEntries(['package-lock.json', 'native/Cargo.lock'].map(name => [name, createHash('sha256').update(readFileSync(resolve(root, name))).digest('hex')])) }, null, 2) + '\n');
+writeFileSync(resolve(out, 'BUILD.json'), JSON.stringify({ version, component, plugin_commit: git('rev-parse', 'HEAD'), dirty: Boolean(git('status', '--porcelain')), platform: process.platform, architecture: process.arch, native_target: component === 'web' ? null : nativeTarget, node: process.version, rust: rustInfo.split(/\r?\n/)[0], host_dependency: '3.3.4', upstream: JSON.parse(readFileSync(resolve(root, 'upstream.lock.json'), 'utf8')), locks_sha256: Object.fromEntries(['package-lock.json', 'native/Cargo.lock'].map(name => [name, createHash('sha256').update(readFileSync(resolve(root, name))).digest('hex')])) }, null, 2) + '\n');
 console.log(`Built ${component}: ${out}`);

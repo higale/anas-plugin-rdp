@@ -1,0 +1,78 @@
+{
+  "version": 0,
+  "_meta": {
+    "name": "简体中文"
+  },
+  "plugin": {
+    "description": "远程桌面连接和服务器配置管理。",
+    "name": "远程桌面"
+  },
+  "status": {
+    "idle": "未连接",
+    "disconnected": "已断开",
+    "opened": "已打开连接页",
+    "connecting": "正在连接…",
+    "authenticating": "正在认证…",
+    "connected": "已连接",
+    "saved": "配置已保存",
+    "reloaded": "配置已重新加载",
+    "deleted": "配置已删除",
+    "reordered": "顺序已保存",
+    "password_required": "请输入密码，然后连接"
+  },
+  "errors": {
+    "conflict": "配置已在其他页面修改，请重新加载后编辑。",
+    "missing": "配置已删除，请从顶部插件菜单返回首页。",
+    "password": "保存的密码无法解密，请重新输入并保存。",
+    "read": "配置读取失败，原文件已保留。请检查文件或恢复备份。",
+    "profile": "配置操作失败，请检查输入或重试。",
+    "cleanup": "连接进程清理失败，请停用插件。",
+    "host_update": "请升级 Anas 至支持插件语言包、配置页面及首页位置的版本。",
+    "interrupted": "远程连接已中断。",
+    "connection": "连接失败，请检查地址、账户和远程服务。",
+    "trust": "证书信任保存失败，请重试。",
+    "load": "组件加载失败，请重新打开插件。",
+    "language": "部分语言文件无法加载，请在 Anas 设置 → 插件中查看详情。"
+  },
+  "actions": {
+    "cancel": "取消",
+    "disconnect": "断开",
+    "new": "新建",
+    "copy": "复制",
+    "delete": "删除",
+    "save": "保存",
+    "reload": "重新加载",
+    "connect": "连接",
+    "add_server": "添加服务器",
+    "start": "启动",
+    "edit": "编辑",
+    "up": "上移",
+    "down": "下移"
+  },
+  "profiles": {
+    "password_saved": "已保存，留空保留",
+    "new": "新配置",
+    "copy_name": "{{name}} 副本",
+    "empty": "还没有服务器配置。",
+    "delete_confirm": "删除“{{name}}”的配置和保存的密码？已有连接不会中断。"
+  },
+  "fields": {
+    "profiles": "服务器配置",
+    "name": "名称",
+    "open_mode": "远程桌面打开位置",
+    "remember_password": "保存密码（加密，可随备份恢复）",
+    "host": "地址",
+    "port": "端口",
+    "username": "用户名",
+    "domain": "域（可选）",
+    "password": "密码"
+  },
+  "modes": {
+    "sidebar": "侧边栏",
+    "window": "独立窗口"
+  },
+  "certificate": {
+    "accept": "信任此证书并重试",
+    "verify": "请核对 {{host}}:{{port}} 的证书 SHA-256。信任仅适用于此目标，指纹变化将再次提示。"
+  }
+}

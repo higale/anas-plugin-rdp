@@ -13,12 +13,19 @@ const inventory = JSON.parse(readFileSync(`${archive}.inventory.json`, 'utf8'));
 const hash = data => createHash('sha256').update(data).digest('hex');
 assert.equal(hash(readFileSync(archive)), inventory.archive_sha256);
 const tar = process.platform === 'win32' ? 'tar.exe' : 'tar';
-const entries = execFileSync(tar, ['-tf', archive], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }).trim().split(/\r?\n/).map(name => name.replace(/^\.\//, ''));
-for (const name of entries) assert.ok(!isAbsolute(name) && !name.includes('\\') && !name.split('/').includes('..'), 'Unsafe archive path');
+const entries = execFileSync(tar, ['-tf', archive], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }).trim().split(/\r?\n/);
+// Do not normalize a malformed archive into passing: Explorer and Anas require
+// canonical entry names, even though tar accepts ./ and a root directory entry.
+for (const name of entries) assert.ok(!isAbsolute(name) && !name.includes('\\') && !name.replace(/\/$/, '').split('/').some(part => !part || part === '.' || part === '..'), 'Non-canonical or unsafe archive path');
 assert.deepEqual(entries.filter(name => name && !name.endsWith('/')).sort(), inventory.files.map(file => file.path).sort());
 mkdirSync(resolve(root, '.local'), { recursive: true });
 const extracted = mkdtempSync(resolve(root, '.local/package-check-'));
-execFileSync(tar, ['-xf', archive, '-C', extracted], { stdio: 'inherit' });
+if (process.platform === 'win32') {
+  // Use an independent Windows extractor instead of validating tar with itself.
+  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$ErrorActionPreference = "Stop"; Expand-Archive -LiteralPath $env:RDP_VERIFY_ARCHIVE -DestinationPath $env:RDP_VERIFY_DIRECTORY'], {
+    stdio: 'inherit', env: { ...process.env, RDP_VERIFY_ARCHIVE: archive, RDP_VERIFY_DIRECTORY: extracted }
+  });
+} else execFileSync(tar, ['-xf', archive, '-C', extracted], { stdio: 'inherit' });
 for (const file of inventory.files) {
   const path = resolve(extracted, file.path);
   const rel = relative(extracted, path);

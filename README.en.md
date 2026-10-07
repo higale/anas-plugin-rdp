@@ -4,13 +4,15 @@
 
 An optional Windows remote desktop plugin providing a real web desktop in an Anas side panel or separate window. It uses pinned IronRDP Web components, WASM, and a bundled native bridge, without a separately deployed gateway.
 
-Windows x64 has passed authentication, rendering, basic keyboard input, and connection lifecycle checks inside Anas. CI covers native builds and universal package verification on Windows x64, Apple Silicon macOS, and Intel macOS; real macOS Anas/RDP interaction still awaits hardware acceptance testing. Chinese input and full keyboard/mouse compatibility need dedicated verification. Clipboard, audio, file transfer, multiple displays, active session transfer, and password storage are not provided.
+Windows x64 has passed authentication, rendering, basic keyboard input, and connection lifecycle checks inside Anas. CI covers native builds and universal package verification on Windows x64, Apple Silicon macOS, and Intel macOS; real macOS Anas/RDP interaction still awaits hardware acceptance testing. Chinese input and full keyboard/mouse compatibility need dedicated verification. Clipboard, audio, file transfer, multiple displays, and active session transfer are not provided.
 
 ## Usage
 
-Requires Anas 3.3.2 or a development build containing commit `c2250c06` (plugin API 1, iframe form support).
+This version requires Anas 3.3.4 or later (API 1, named views, plugin language packs and home locations).
 
-Download the universal ZIP from [GitHub Releases](https://github.com/higale/anas-plugin-rdp/releases); the same package works on Windows x64, Apple Silicon Macs, and Intel Macs. Install from Anas Settings → Plugins: in Anas 3.3.3 or later, select the ZIP directly or select `PLUGIN.json` inside the complete extracted folder; in Anas 3.3.2, extract first and select the entire folder. Development builds use the complete `dist/` directory. For certificates not trusted by the system, independently verify the SHA-256 before trusting that target. Passwords remain in memory and are excluded from ordinary settings and backups. See the [bilingual user guide](docs/USER_GUIDE.md). End users do not need Rust, Node, or build tools.
+For published versions, download the universal ZIP from [GitHub Releases](https://github.com/higale/anas-plugin-rdp/releases); the same package works on Windows x64, Apple Silicon Macs, and Intel Macs. Install from Anas Settings → Plugins: select the ZIP directly or select `PLUGIN.json` inside the complete extracted folder. Development builds use the complete `dist/` directory. For certificates not trusted by the system, independently verify the SHA-256 before trusting that target. Multiple profiles support sidebar or window placement and optional password storage. Saved passwords use AES-GCM with a built-in versioned key and restore across machines through Anas backups; anyone with the configuration and plugin code can decrypt them. Plugin names and UI use the same i18next JSON language-pack format as Anas, with English and Simplified Chinese included. Add or edit translations in the ZIP’s `lang/` directory and install; the plugin follows the host’s selected language. Only host language packs create selectable languages; plugin-only languages are ignored. Missing text falls back to English. Reinstallation uses only the new package’s translations. Language, theme, and font size follow the host without reconnecting. See [language-pack instructions](lang/README.md). See the [bilingual user guide](docs/USER_GUIDE.md). End users do not need Rust, Node, or build tools.
+
+The home page opens a server list in the sidebar by default, retaining any saved location preference. The top `+ / − / ↑ / ↓` controls add, delete, and reorder servers; hovering or keyboard focus reveals Start and Edit. A separate form handles saving or canceling edits. Start opens the configured location and connects with a saved password, or prompts for one. Change “Home page opens in” by selecting RDP in Anas Settings → Plugins; the preference is saved in plugin configuration and used by the top menu on the next opening. Each server’s “Remote desktop opens in” setting is independent. Changing the home location does not close pages or interrupt connections.
 
 ## Development
 
@@ -24,9 +26,9 @@ npm run typecheck
 npm run test:ui
 npm run build
 npm test
-npm run package
-npm run verify:package
 ```
+
+For daily changes, build `dist/` and install its `PLUGIN.json`. Run `npm run package` and `npm run verify:package` when publishing, distributing, or testing ZIP installation.
 
 The upstream build also runs type checks and 137 tests. `dist/` is the installable directory; `artifacts/` contains ZIP archives, checksums, and file inventories. Local builds target one platform and CPU architecture; GitHub CI builds the shared Web/WASM and JavaScript once, builds native helpers on three platforms, and combines and verifies the universal package. Releases contain only the universal ZIP and `SHA256SUMS.txt`; component archives and file inventories stay in Actions. Dependency versions, licenses, and original notices are retained. The public repository uses independent source snapshots; see the [publishing workflow](docs/SOURCE_PUBLISHING.md).
 

@@ -2,13 +2,15 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { Profiles } from './profiles';
 
 type Context = { pluginId: string; packageDirectory: string; dataDirectory: string };
 type Session = { owner: string; child: ChildProcessWithoutNullStreams; state: string; certificate?: { sha256: string; trusted: boolean }; exited: Promise<void>; closed: boolean };
 let context: Context;
+let profiles: Profiles;
 const sessions = new Map<string, Session>();
 
-export function activate(value: Context) { context = value; }
+export function activate(value: Context) { context = value; profiles = new Profiles(value.dataDirectory); }
 function text(value: unknown, max: number): string {
   if (typeof value !== 'string' || value.length > max) throw new Error('Invalid connection settings.');
   return value;
@@ -32,6 +34,7 @@ async function stop(session: Session) {
 }
 
 export async function call(method: string, params: unknown) {
+  if (method.startsWith('profiles.') || method.startsWith('trusts.')) return profiles.call(method, params);
   const input = record(params);
   const owner = text(input.owner, 80);
   if (!owner) throw new Error('Missing page owner.');

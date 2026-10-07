@@ -1,0 +1,78 @@
+{
+  "version": 0,
+  "_meta": {
+    "name": "English"
+  },
+  "plugin": {
+    "description": "Remote desktop connections and saved server profiles.",
+    "name": "Remote Desktop"
+  },
+  "status": {
+    "idle": "Disconnected",
+    "disconnected": "Disconnected",
+    "opened": "Connection page opened",
+    "connecting": "Connecting…",
+    "authenticating": "Authenticating…",
+    "connected": "Connected",
+    "saved": "Profile saved",
+    "reloaded": "Profile reloaded",
+    "deleted": "Profile deleted",
+    "reordered": "Order saved",
+    "password_required": "Enter a password, then connect"
+  },
+  "errors": {
+    "conflict": "This profile changed in another page. Reload before editing.",
+    "missing": "This profile was deleted. Reopen the home page from the top plugin menu.",
+    "password": "The saved password cannot be decrypted. Enter and save it again.",
+    "read": "Cannot read profiles. The original file is preserved. Check it or restore a backup.",
+    "profile": "Profile operation failed. Check the fields or try again.",
+    "cleanup": "Connection cleanup failed. Disable the plugin.",
+    "host_update": "Update Anas to a version supporting plugin language packs, profile pages, and home locations.",
+    "interrupted": "The remote connection was interrupted.",
+    "connection": "Connection failed. Check the address, credentials, and remote service.",
+    "trust": "Could not save certificate trust. Try again.",
+    "load": "Component loading failed. Reopen the plugin.",
+    "language": "Some language files could not be loaded. Check the plugin language files in Anas Settings > Plugins."
+  },
+  "actions": {
+    "cancel": "Cancel",
+    "disconnect": "Disconnect",
+    "new": "New",
+    "copy": "Copy",
+    "delete": "Delete",
+    "save": "Save",
+    "reload": "Reload",
+    "connect": "Connect",
+    "add_server": "Add server",
+    "start": "Start",
+    "edit": "Edit",
+    "up": "Move up",
+    "down": "Move down"
+  },
+  "profiles": {
+    "password_saved": "Saved; leave blank to keep",
+    "new": "New profile",
+    "copy_name": "{{name}} copy",
+    "empty": "No servers yet.",
+    "delete_confirm": "Delete “{{name}}” and its saved password? Existing connections will stay open."
+  },
+  "fields": {
+    "profiles": "Server profiles",
+    "name": "Name",
+    "open_mode": "Remote desktop opens in",
+    "remember_password": "Remember password (encrypted, included in backups)",
+    "host": "Address",
+    "port": "Port",
+    "username": "Username",
+    "domain": "Domain (optional)",
+    "password": "Password"
+  },
+  "modes": {
+    "sidebar": "Sidebar",
+    "window": "Window"
+  },
+  "certificate": {
+    "accept": "Trust certificate and retry",
+    "verify": "Verify the certificate SHA-256 for {{host}}:{{port}}. Trust applies only to this target; changes require confirmation."
+  }
+}

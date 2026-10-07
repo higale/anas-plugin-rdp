@@ -10,8 +10,7 @@ import { release } from 'node:os';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packageDirectory = resolve(root, process.env.RDP_TEST_PACKAGE ?? 'dist');
-// Anas 3.3.2 selects a directory; 3.3.3+ selects a ZIP or PLUGIN.json.
-const installSource = resolve(root, process.env.RDP_TEST_INSTALL_SOURCE ?? packageDirectory);
+const installSource = resolve(root, process.env.RDP_TEST_INSTALL_SOURCE ?? join(packageDirectory, 'PLUGIN.json'));
 const host = resolve(root, '../Anas');
 const require = createRequire(join(host, 'package.json'));
 const { _electron: electron } = require('playwright');
@@ -36,13 +35,14 @@ function helperPids() {
   const entries = result.trim() ? JSON.parse(result) : [];
   return (Array.isArray(entries) ? entries : [entries]).filter(item => item.Path?.toLowerCase().startsWith(directory.toLowerCase())).map(item => item.Id);
 }
-async function connect(page, approveCertificate = false) {
+async function connect(page, approveCertificate = false, savedPassword = false) {
   await expect(page.locator('#connect')).toBeEnabled({ timeout: 20000 });
   await page.locator('#host').fill(config.host);
   await page.locator('#port').fill(String(config.port ?? 3389));
   await page.locator('#username').fill(config.username);
   await page.locator('#domain').fill(config.domain ?? '');
-  await page.locator('#password').fill(config.password);
+  if (!savedPassword) await page.locator('#password').fill(config.password);
+  else await expect(page.locator('#password')).toHaveValue('');
   await page.locator('#connect').click();
   if (approveCertificate) {
     await expect(page.locator('#trust')).toBeVisible({ timeout: 20000 });
@@ -60,9 +60,21 @@ async function connect(page, approveCertificate = false) {
   // Require painted content, without depending on wallpaper or open windows.
   }), { timeout: 15000 }).toBeGreaterThan(4);
 }
+async function centered(page) {
+  await expect.poll(() => page.locator('canvas').evaluate(canvas => {
+    const box = document.getElementById('desktop').getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect();
+    return Math.max(Math.abs(rect.x + rect.width / 2 - box.x - box.width / 2), Math.abs(rect.y + rect.height / 2 - box.y - box.height / 2), rect.width - box.width, rect.height - box.height,
+      Math.abs(rect.width / rect.height - canvas.width / canvas.height));
+  }), {timeout:5000}).toBeLessThan(2);
+}
 try {
   app = await electron.launch({ executablePath: require('electron'), args: [host, '--data-dir', directory], cwd: host, env, timeout: 45000 });
   const page = await app.firstWindow();
+  const openHome = async () => {
+    await page.getByRole('button', { name: /^(Plugins|插件)$/ }).click();
+    await page.getByRole('menuitem', { name: /^(Remote Desktop|远程桌面)$/ }).click();
+  };
   page.on('console', event => { if (event.type() === 'error') browserErrors.push(event.text()); });
   page.on('pageerror', error => browserErrors.push(String(error)));
   await page.locator('[data-agent-composer-input]').waitFor({ timeout: 45000 });
@@ -76,33 +88,117 @@ try {
   await page.getByRole('menuitem', { name: /^(Settings|设置)$/ }).click();
   await page.locator('[data-settings-tab="plugins"]').click();
   await page.getByRole('button', { name: /Open in side panel|在侧边.*打开|侧边.*打开/ }).click();
-  const frame = page.frameLocator('iframe[title="Remote Desktop / 远程桌面"]');
-  await expect(frame.locator('#connect')).toBeEnabled({ timeout: 20000 });
-  const pluginFrame = page.frames().find(frame => frame.url().startsWith('anas-plugin://rdp/'));
+  let frame = page.frameLocator('iframe[src="anas-plugin://rdp/index.html"]');
+  await expect(frame.locator('#new')).toBeEnabled({ timeout: 20000 });
+  let pluginFrame = page.frames().find(frame => frame.url().startsWith('anas-plugin://rdp/'));
   assert.ok(pluginFrame);
   assert.equal(await pluginFrame.evaluate(() => typeof window.gale), 'undefined');
   phase = 'appearance';
   for (const [theme, fontSize] of [['light',14], ['dark',18]]) {
     await page.evaluate(settings => globalThis.gale.config.updateSettings(settings), { theme, fontSize });
     await pluginFrame.goto(pluginFrame.url());
-    await expect(frame.locator('#connect')).toBeEnabled({ timeout: 20000 });
+    await expect(frame.locator('#new')).toBeEnabled({ timeout: 20000 });
     assert.equal(await pluginFrame.evaluate(() => document.documentElement.dataset.theme), theme);
-    assert.equal(await frame.locator('#host').evaluate(input => input.getBoundingClientRect().height), Math.max(30, fontSize + 18));
+    assert.equal(await frame.locator('#new').evaluate(input => input.getBoundingClientRect().height), Math.max(30, fontSize + 18));
     assert.ok(await pluginFrame.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     // No connection information has been entered at this point.
-    await page.locator('iframe[title="Remote Desktop / 远程桌面"]').screenshot({ path: join(root, `.local/ui-${theme}.png`) });
+    await page.locator('iframe[src="anas-plugin://rdp/index.html"]').screenshot({ path: join(root, `.local/ui-${theme}.png`) });
   }
   results.push('light/dark themes, large font, and narrow sidebar layout');
   await page.evaluate(() => globalThis.gale.config.updateSettings({ theme: 'light', fontSize: 14 }));
   // Reload to consume the restored host appearance before entering any credentials.
   await pluginFrame.goto(pluginFrame.url());
+  phase = 'profiles';
+  await expect(frame.locator('#new')).toBeEnabled({timeout:20000});
+  const manager = frame;
+  const managerFrame = pluginFrame;
+  await managerFrame.evaluate(() => anas.data.set('home_open_location', 'sidebar'));
+  await expect.poll(() => managerFrame.evaluate(() => anas.data.get('home_open_location'))).toBe('sidebar');
+  await manager.locator('#new').click();
+  await manager.locator('#name').fill('RDP integration');
+  await manager.locator('#host').fill(config.host);
+  await manager.locator('#port').fill(String(config.port ?? 3389));
+  await manager.locator('#username').fill(config.username);
+  await manager.locator('#domain').fill(config.domain ?? '');
+  await manager.locator('#remember-password').check();
+  await manager.locator('#password').fill(config.password);
+  await manager.locator('#save').click();
+  await expect(manager.locator('#profiles li')).toHaveCount(1);
+  await managerFrame.evaluate(async () => {
+    const [profile] = await anas.backend.call('profiles.list', {});
+    await anas.openView({instanceId:profile.id,location:profile.openMode,title:profile.name});
+  });
+  frame = page.frameLocator('iframe[title="RDP integration"]');
+  await expect(frame.locator('#connect')).toBeEnabled({ timeout: 20000 });
+  pluginFrame = page.frames().find(frame => frame.url().includes('?instance='));
+  const profileId = new URL(pluginFrame.url()).searchParams.get('instance');
+  const openPopup = () => page.evaluate(instanceId => globalThis.gale.plugins.invoke('rdp', 'host.openView', { instanceId, location: 'window', title: 'RDP integration' }), profileId);
+  await expect(frame.locator('#password')).toHaveValue('');
+  await expect(frame.locator('#remember-password')).toBeChecked();
+  // Opening a second time reuses the same browsing context without logging in.
+  await managerFrame.evaluate(async id => anas.openView({ instanceId: id, location: 'sidebar', title: 'RDP integration' }), profileId);
+  await expect(page.locator('iframe[title="RDP integration"]')).toHaveCount(1);
+  await expect.poll(helperPids).toEqual([]);
+  const saved = JSON.parse(await readFile(join(directory, 'plugin_data/rdp/profiles.json'), 'utf8'));
+  assert.equal(JSON.stringify(saved).includes(config.password), false);
+  assert.equal(saved.profiles[0].password.version, 1);
+  const profileCopy = await managerFrame.evaluate(async () => {
+    const [profile] = await anas.backend.call('profiles.list', {});
+    return anas.backend.call('profiles.copy', {id:profile.id,revision:profile.revision,name:'Second server'});
+  });
+  await managerFrame.evaluate(async profile => {
+    await anas.backend.call('profiles.save', {...profile,openMode:'window',passwordAction:'remove'});
+    await anas.openView({instanceId:profile.id,location:'window',title:profile.name});
+  }, profileCopy);
+  await expect.poll(() => app.windows().length).toBe(2);
+  const second = app.windows().find(window => window !== page);
+  await expect(second.locator('#name')).toHaveValue('Second server');
+  await expect(second.locator('#remember-password')).not.toBeChecked();
+  await expect(second.locator('#open-mode')).toHaveValue('window');
+  await second.close();
+  await managerFrame.evaluate(async id => {
+    const profiles = await anas.backend.call('profiles.list', {});
+    const profile = profiles.find(item => item.id === id);
+    await anas.backend.call('profiles.delete', profile);
+  }, profileCopy.id);
+  results.push('multiple saved profiles, portable encrypted password, copy/delete, per-profile placement, duplicate page reuse, no automatic login');
   phase = 'sidebar connect';
-  await connect(frame, true);
+  await page.bringToFront();
+  await openHome();
+  await manager.locator('.profile-select').first().focus();
+  await manager.locator('#profiles li').first().hover();
+  await manager.locator('[data-action="start"]').first().click();
+  await expect(frame.locator('#trust')).toBeVisible({ timeout: 20000 });
+  await expect(frame.locator('#fingerprint')).toHaveText(trust.certificate_sha256);
+  await frame.locator('#accept-certificate').click();
+  await expect(frame.locator('#status')).toHaveText(/^(Connected|已连接)$/, { timeout: 25000 });
+  await centered(frame);
+  phase = 'live language';
+  for (const [language, label] of [['en','Connected'],['zh-CN','已连接']]) {
+    await page.evaluate(language => globalThis.gale.config.updateSettings({language}), language);
+    await expect(frame.locator('#status')).toHaveText(label, {timeout:10000});
+    await expect.poll(() => helperPids().length).toBe(1);
+  }
+  results.push('language follows host changes without reconnecting');
+  await openHome();
+  await expect(managerFrame.locator('#profiles')).toBeVisible();
+  const connectedPids = helperPids();
+  await manager.locator('.profile-select').first().focus();
+  await manager.locator('#profiles li').first().hover();
+  await manager.locator('[data-action="start"]').first().click();
+  await expect(frame.locator('#status')).toHaveText(/Connected|已连接/);
+  await page.waitForTimeout(1500);
+  assert.deepEqual(helperPids(), connectedPids);
+  await expect.poll(() => helperPids().length).toBe(1);
   results.push('untrusted certificate rejected; approved target fingerprint accepted; sidebar authentication and desktop');
+  results.push('Start from the server list connects with the saved password and reuses an active session without reconnecting');
   // Verify the session survives the host RPC duration.
   await page.waitForTimeout(32000);
   await expect(frame.locator('#status')).toHaveText(/^(Connected|已连接)$/);
+  phase = 'keyboard after panel navigation';
   await frame.locator('canvas').hover();
+  await frame.locator('canvas').focus();
+  assert.equal(await frame.locator('canvas').evaluate(canvas => canvas.getRootNode().activeElement === canvas), true);
   const checksum = () => frame.locator('canvas').evaluate(canvas => {
     const pixels = canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;
     let hash = 0; for (let i = 0; i < pixels.length; i += 100) hash = (Math.imul(hash, 31) + pixels[i] + pixels[i+1] + pixels[i+2]) | 0;
@@ -117,15 +213,14 @@ try {
   await frame.locator('#disconnect').click();
   await expect(frame.locator('#connect')).toBeEnabled();
   await expect(frame.locator('#password')).toHaveValue('');
-  const data = await pluginFrame.evaluate(() => window.anas.data.get('connection'));
-  assert.deepEqual(Object.keys(data).sort(), ['domain','host','port','username']);
-  results.push('disconnect and password excluded from persistence');
+  results.push('disconnect and password absent from form');
   await expect.poll(helperPids).toEqual([]);
   phase = 'cancel negotiation';
   const sockets = new Set();
   const stalled = createServer(socket => { sockets.add(socket); socket.on('error', () => {}); socket.on('close', () => sockets.delete(socket)); });
   await new Promise(resolve => stalled.listen(0, '127.0.0.1', resolve));
   try {
+    await frame.locator('#remember-password').uncheck();
     await frame.locator('#host').fill('127.0.0.1');
     await frame.locator('#port').fill(String(stalled.address().port));
     await frame.locator('#username').fill('fixture');
@@ -141,34 +236,57 @@ try {
     await new Promise(resolve => stalled.close(resolve));
   }
   phase = 'popup';
-  await page.evaluate(() => globalThis.gale.plugins.openWindow('rdp'));
+  // Restore the tested profile after the synthetic cancellation target.
+  await frame.locator('#host').fill(config.host);
+  await frame.locator('#port').fill(String(config.port ?? 3389));
+  await frame.locator('#username').fill(config.username);
+  await frame.locator('#password').fill(config.password);
+  await frame.locator('#remember-password').check();
+  await frame.locator('#save').click();
+  await expect(frame.locator('#status')).toHaveText(/Profile saved|配置已保存/);
+  await openPopup();
   await expect.poll(() => app.windows().length).toBe(2);
   const popup = app.windows().find(window => window !== page);
-  await connect(popup);
+  await connect(popup, false, true);
+  await centered(popup);
+  for (const [width,height] of [[1200,500],[600,900]]) {
+    await app.evaluate(({BrowserWindow}, size) => {
+      BrowserWindow.getAllWindows().find(window => window.webContents.getURL().includes('anas-plugin://rdp/')).setSize(...size);
+    }, [width,height]);
+    await centered(popup);
+    await popup.locator('canvas').hover();
+  }
+  results.push('desktop remains centered, proportional and contained in sidebar and wide/tall windows');
   results.push('independent window authentication and desktop');
   phase = 'page close';
   await popup.close();
   await expect.poll(helperPids).toEqual([]);
   results.push('closing a connected page reclaims its helper');
-  await connect(frame);
+  await page.bringToFront();
+  await frame.locator('#reload').click();
+  await expect(frame.locator('#status')).toHaveText(/Profile reloaded|配置已重新加载/);
+  await connect(frame, false, true);
   phase = 'backup';
   await app.evaluate(({ dialog }, path) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: path }); }, `${directory}-backup.zip`);
   const backup = await page.evaluate(() => globalThis.gale.app.backupData());
   assert.ok(backup?.path);
+  await page.evaluate(() => globalThis.gale.plugins.invoke('rdp', 'data.set', { key: 'home_open_location', value: 'window' }));
   await expect.poll(helperPids).toEqual([]);
   await expect(frame.locator('#connect')).toBeEnabled();
   results.push('backup stops active connection and helper');
   phase = 'reconnect after backup';
-  await connect(frame);
+  await connect(frame, false, true);
   phase = 'restore';
   await page.evaluate(path => globalThis.gale.app.restoreData(path), backup.path);
   await expect.poll(helperPids).toEqual([]);
-  await expect(page.locator('iframe[title="Remote Desktop / 远程桌面"]')).toHaveCount(0);
+  await expect(page.locator('iframe[src^="anas-plugin://rdp/"]')).toHaveCount(0);
   assert.equal((await page.evaluate(() => globalThis.gale.plugins.list())).find(item => item.id === 'rdp').backendStatus, 'stopped');
+  assert.equal((await page.evaluate(() => globalThis.gale.plugins.invoke('rdp', 'host.home'))).location, 'sidebar');
   results.push('restore reclaims active connection without automatic login');
-  await page.evaluate(() => globalThis.gale.plugins.openWindow('rdp'));
+  await openPopup();
   await expect.poll(() => app.windows().length).toBe(2);
-  await connect(app.windows().find(window => window !== page));
+  await connect(app.windows().find(window => window !== page), false, true);
+  results.push('restored backup decrypts the saved password and reconnects');
   phase = 'disable';
   await page.evaluate(() => globalThis.gale.plugins.setEnabled('rdp', false));
   await expect.poll(() => app.windows().length).toBe(1);
@@ -178,14 +296,14 @@ try {
   await expect.poll(helperPids).toEqual([]);
   phase = 'uninstall';
   await page.evaluate(() => globalThis.gale.plugins.uninstall('rdp'));
-  assert.ok((await readFile(join(directory, 'plugin_data/rdp/state.json'), 'utf8')).length);
+  assert.ok((await readFile(join(directory, 'plugin_data/rdp/profiles.json'), 'utf8')).length);
   await expect.poll(helperPids).toEqual([]);
   results.push('uninstall retains ordinary configuration and leaves no helper');
   phase = 'forced host termination';
   await page.evaluate(() => globalThis.gale.plugins.install());
-  await page.evaluate(() => globalThis.gale.plugins.openWindow('rdp'));
+  await openPopup();
   await expect.poll(() => app.windows().length).toBe(2);
-  await connect(app.windows().find(window => window !== page));
+  await connect(app.windows().find(window => window !== page), false, true);
   await expect.poll(() => helperPids().length).toBe(1);
   // On Windows Electron's launcher PID can differ from its main-process PID.
   const hostPid = await app.evaluate(() => process.pid);

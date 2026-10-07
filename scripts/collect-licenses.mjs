@@ -54,17 +54,18 @@ for (const [cwd, name, platform] of [
 }
 // Runtime libraries embedded by the upstream Web Component build.
 const npmRoot = resolve(root, '.local/upstream/IronRDP/web-client/iron-remote-desktop/node_modules');
-const visitNpm = name => {
-  const directory = resolve(npmRoot, name);
+const visitNpm = (name, modules = npmRoot) => {
+  const directory = resolve(modules, name);
   const pkg = JSON.parse(readFileSync(resolve(directory, 'package.json'), 'utf8'));
   const key = `npm/${pkg.name.replaceAll('/', '_')}-${pkg.version}`;
   if (inventory.has(key)) return;
   retain('npm', pkg, directory);
-  for (const dependency of Object.keys(pkg.dependencies ?? {})) if (existsSync(resolve(npmRoot, dependency, 'package.json'))) visitNpm(dependency);
+  for (const dependency of Object.keys(pkg.dependencies ?? {})) if (existsSync(resolve(modules, dependency, 'package.json'))) visitNpm(dependency, modules);
 };
 if (scope !== 'native') {
   visitNpm('svelte');
   visitNpm('ua-parser-js');
+  visitNpm('i18next', resolve(root, 'node_modules'));
 }
 const entries = [...inventory.entries()].sort(([a], [b]) => a.localeCompare(b));
 writeFileSync(resolve(output, 'inventory.json'), JSON.stringify(Object.fromEntries(entries), null, 2) + '\n');

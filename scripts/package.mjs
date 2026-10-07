@@ -17,7 +17,7 @@ if (!universal) {
 }
 const version = component === 'native' ? build.version : JSON.parse(readFileSync(resolve(source, 'PLUGIN.json'), 'utf8')).plugin_version;
 assert.match(version, /^\d+\.\d+\.\d+$/);
-let topLevel = ['PLUGIN.json', 'BUILD.json', 'USER_GUIDE.md', 'app.js', 'backend.cjs', 'index.html', 'style.css', 'ironrdp_web_bg.wasm', 'native', 'third-party'];
+let topLevel = ['PLUGIN.json', 'BUILD.json', 'USER_GUIDE.md', 'app.js', 'backend.cjs', 'index.html', 'style.css', 'ironrdp_web_bg.wasm', 'native', 'third-party', 'lang'];
 if (component === 'web') topLevel = topLevel.filter(name => name !== 'native');
 if (component === 'native') topLevel = ['BUILD.json', 'native', 'third-party'];
 assert.deepEqual(readdirSync(source).sort(), topLevel.sort(), 'Unexpected package content');
@@ -46,9 +46,11 @@ const variant = universal ? 'universal' : component === 'web' ? 'web' : `${compo
 const archive = resolve(root, 'artifacts', `anas-rdp-${version}-${variant}.zip`);
 // zip updates existing archives; rebuild this exact output to exclude stale entries.
 if (existsSync(archive)) unlinkSync(archive);
-if (process.platform === 'win32') execFileSync('tar.exe', ['-a', '-c', '-f', archive, '-C', source, '.'], { stdio: 'inherit' });
+// Enumerate the package roots: archiving '.' adds ./ entries that Explorer
+// cannot expose and that Anas correctly rejects as non-canonical paths.
+if (process.platform === 'win32') execFileSync('tar.exe', ['-a', '-c', '-f', archive, '-C', source, ...topLevel], { stdio: 'inherit' });
 else if (process.platform === 'darwin') execFileSync('/usr/bin/ditto', ['-c', '-k', source, archive], { stdio: 'inherit' });
-else if (process.platform === 'linux' && universal) execFileSync('zip', ['-q', '-r', archive, '.'], { cwd: source, stdio: 'inherit' });
+else if (process.platform === 'linux' && universal) execFileSync('zip', ['-q', '-r', archive, ...topLevel], { cwd: source, stdio: 'inherit' });
 else throw new Error('Packaging is only supported on Windows and macOS.');
 const sha256 = createHash('sha256').update(readFileSync(archive)).digest('hex');
 writeFileSync(`${archive}.sha256`, `${sha256}  ${archive.split(/[\\/]/).at(-1)}\n`);
