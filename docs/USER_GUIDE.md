@@ -10,7 +10,7 @@
 4. 点击列表中的「启动」，按服务器配置打开连接页；已保存密码时直接连接，否则输入密码后点击「连接」。普通打开首页、刷新页面或恢复备份均不自动登录。同一配置在同一位置重复打开会聚焦已有页面；不同位置的页面独立。修改打开方式影响下次打开，不转移会话。
    使用 Anas 页面标题栏的「移至独立窗口」或窗口标题栏的「移至侧边栏」移动当前页面，保留连接及未保存内容。目标已有相同页面时需先关闭其中一份，移动不会覆盖。
 5. 证书不受系统信任时，独立核对服务器证书 SHA-256 后再信任并重试。指纹变化会再次提示。
-6. 在桌面区域操作键鼠；点击页面右上方「断开」，连接过程中该位置显示「取消」。需要返回服务器列表时，从 Anas 顶部插件菜单重新打开首页，已有连接保持运行。
+6. 在桌面区域操作键鼠；侧边栏连接页右上方提供「断开」，连接过程中显示「取消」。独立窗口使用宿主标题栏的断开／取消图标，悬停可查看提示。需要返回服务器列表时，从 Anas 顶部插件菜单重新打开首页，已有连接保持运行。
 
 密码采用内置版本密钥和随机 IV 的 AES-GCM 加密，仅避免明文直读；持有配置和插件代码即可解密。无需主密码或系统凭据库，可通过 Anas 数据备份跨机器恢复；备份应视为包含登录凭据。密码不回填表单，连接成功后清空临时输入。卸载默认保留配置，同 ID 重装后可继续使用；若勾选宿主卸载确认框的「删除插件数据」，服务器配置、保存的密码和首页偏好均删除，已有备份仍保留；旧版单服务器配置自动迁入。
 
@@ -36,7 +36,7 @@ Requires **Anas 3.3.5 or later** (plugin API 1).
 4. Select Start in the list to open the configured location and connect with the saved password, or enter a password and select Connect. Opening the home page, reloading a page, or restoring a backup never signs in automatically. Reopening the same profile in the same location focuses its existing page; different locations are independent. Changing placement affects the next opening and does not transfer sessions.
    Use **Move to window** in the Anas panel header or **Move to side panel** in the window title bar to move the same page, connection, and unsaved input. If the destination already contains the same instance, close one first; moving never replaces it.
 5. Independently verify the certificate SHA-256 before accepting an untrusted certificate and retrying. Changes require confirmation again.
-6. Use keyboard and mouse inside the desktop. Select Disconnect at the top right of the page, or Cancel in the same position while connecting. Reopen the home page from the Anas top plugin menu to return to the server list while keeping the session connected.
+6. Use keyboard and mouse inside the desktop. The sidebar connection page shows Disconnect at the top right, or Cancel while connecting. In a separate window, use the Disconnect/Cancel icon in the host titlebar; hover to see its tooltip. Reopen the home page from the Anas top plugin menu to return to the server list while keeping the session connected.
 
 Passwords use AES-GCM with a built-in versioned key and random IV, only concealing plain text: anyone with the configuration and plugin code can decrypt them. No master password or OS vault is needed. Anas backups restore them across machines; treat backups as containing login credentials. Passwords are not filled back into forms; temporary input clears after connection. Uninstalling retains profiles by default for reinstallation under the same ID. Selecting Delete plugin data in the host’s uninstall confirmation also removes profiles, saved passwords and home preferences; existing backups are kept. Older single-server settings migrate automatically.
 
