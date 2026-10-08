@@ -4,12 +4,17 @@ import type { UserInteraction, NewSessionInfo } from '../../artifacts/upstream/i
 import type { Profile, Target, Trust } from '../profile-types';
 import { i18n, initializeLanguages, setLanguage, t } from './i18n';
 
+type Toolbar = { status?: { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' }; actions: { id: string; label: string; icon: 'x' | 'unplug'; disabled: boolean }[] };
+
 declare global {
   interface Window {
     anas: {
-      getInfo(): Promise<{ language: string; theme: string; fontSize: number; view?: { instanceId: string; location: 'sidebar' | 'window' } }>;
-      getLanguageResources?(): Promise<{ resources: Record<string, Record<string, unknown>>; errors: string[] }>;
-      openView?(options: { instanceId: string; location: 'sidebar' | 'window'; title?: string }): Promise<void>;
+      getInfo(): Promise<{ language: string; theme: string; fontSize: number; view: { instanceId: string; location: 'sidebar' | 'window' } }>;
+      onViewChanged(listener: (view: { instanceId: string; location: 'sidebar' | 'window' }) => void): () => void;
+      setToolbar(toolbar: Toolbar | null): Promise<void>;
+      onToolbarAction(listener: (id: string) => void | Promise<void>): () => void;
+      getLanguageResources(): Promise<{ resources: Record<string, Record<string, unknown>>; errors: string[] }>;
+      openView(options: { instanceId: string; location: 'sidebar' | 'window'; title?: string }): Promise<void>;
       data: { get(key: string): Promise<unknown>; set(key: string, value: unknown): Promise<void> };
       backend: { call(method: string, params: unknown): Promise<unknown> };
     };
@@ -30,6 +35,7 @@ let trusts: Trust[] = [];
 let pendingTrust: Trust | undefined;
 let connecting = false;
 let connected = false;
+let disconnecting = false;
 let savingTrust = false;
 let profiles: Profile[] = [];
 let selected: Profile | undefined;
@@ -43,7 +49,36 @@ let deletePending = false;
 let ready = false;
 let statusKey = 'status.idle';
 let errorKey: string | undefined;
-function status(key: string) { statusKey = key; element('status').textContent = t(key); }
+let releaseToolbarListener: (() => void) | undefined;
+let toolbarSnapshot = '';
+let toolbarRevision = 0;
+let toolbarReady = false;
+function presentation() {
+  element('connection-header').hidden = instanceId !== 'main' && location === 'window' && toolbarReady;
+  if (!releaseToolbarListener || closing) return;
+  const toolbar: Toolbar | null = instanceId === 'main' ? null : {
+    status: { label: t(statusKey), tone: connected ? 'success' : connecting || disconnecting ? 'warning' : 'neutral' },
+    actions: [{ id: 'disconnect', label: t(connecting ? 'actions.cancel' : 'actions.disconnect'), icon: connecting ? 'x' : 'unplug', disabled: !connecting && !connected }],
+  };
+  const snapshot = JSON.stringify(toolbar);
+  if (snapshot === toolbarSnapshot) return;
+  toolbarSnapshot = snapshot;
+  const revision = ++toolbarRevision;
+  void window.anas.setToolbar(toolbar).then(() => {
+    if (closing || revision !== toolbarRevision) return;
+    toolbarReady = true;
+    element('toolbar-error').hidden = true;
+    presentation();
+  }).catch(() => {
+    if (closing || revision !== toolbarRevision) return;
+    toolbarReady = false;
+    toolbarSnapshot = '';
+    element('connection-header').hidden = false;
+    element('toolbar-error').textContent = t('errors.toolbar');
+    element('toolbar-error').hidden = false;
+  });
+}
+function status(key: string) { statusKey = key; element('status').textContent = t(key); presentation(); }
 function failure(key: string) { errorKey = key; element('error').hidden = false; element('error').textContent = t(key); element('retry-profiles').hidden = instanceId !== 'main' || editorOpen; }
 function profileFailure(error: unknown) {
   const code = String(error);
@@ -55,7 +90,7 @@ function profileFailure(error: unknown) {
 }
 function controls() {
   element('connection').toggleAttribute('inert', !ready);
-  const busy = connecting || connected || savingTrust || editing || !ready;
+  const busy = connecting || connected || disconnecting || savingTrust || editing || !ready;
   const manager = instanceId === 'main';
   element('manager').hidden = !manager || editorOpen;
   element('manager').toggleAttribute('inert', !ready);
@@ -79,6 +114,7 @@ function controls() {
   if (instanceId === 'main' && !input('remember-password').checked) input('password').disabled = true;
   input('password').placeholder = selected?.hasPassword && !passwordEdited ? t('profiles.password_saved') : '';
   document.body.dataset.connected = String(connected);
+  presentation();
 }
 function selectProfile(profile?: Profile) {
   selected = profile;
@@ -152,7 +188,6 @@ async function openEditor(id: string) {
 }
 async function startProfile(id: string) {
   await edit(async () => {
-    if (!window.anas.openView) { failure('errors.host_update'); return; }
     const profile = await loadSavedProfile(id);
     const token = await window.anas.backend.call('profiles.launch', { id: profile.id, revision: profile.revision });
     try { await window.anas.openView({ instanceId: profile.id, location: profile.openMode, title: profile.name }); }
@@ -183,6 +218,8 @@ async function edit(action: () => Promise<void>) {
 }
 function target(): Target { return { host: input('host').value.trim(), port: Number(input('port').value), username: input('username').value, domain: input('domain').value }; }
 async function disconnect() {
+  if (disconnecting) return;
+  disconnecting = true;
   const mine = ++generation;
   connecting = false;
   connected = false;
@@ -200,6 +237,8 @@ async function disconnect() {
   // A rejected graceful shutdown must not prevent transport or UI cleanup.
   try { oldUi?.shutdown(); } catch { /* The helper below owns transport cleanup. */ }
   oldDesktop?.remove();
+  status('status.disconnecting');
+  controls();
   // Cancel a Start click still waiting to be consumed when the user disconnects.
   if (instanceId !== 'main') await window.anas.backend.call('profiles.consumeLaunch', { id: instanceId, location }).catch(() => null);
   try {
@@ -207,6 +246,7 @@ async function disconnect() {
   } catch {
     if (generation === mine) failure('errors.cleanup');
   } finally {
+    disconnecting = false;
     if (generation === mine) { status('status.disconnected'); controls(); }
   }
 }
@@ -255,7 +295,7 @@ function fitDesktop(remote: HTMLElement) {
   resize();
 }
 async function connect() {
-  if (connecting || connected || savingTrust || editing || !ready) return;
+  if (connecting || connected || disconnecting || savingTrust || editing || !ready) return;
   if (instanceId === 'main') {
     await saveEditor();
     return;
@@ -382,21 +422,22 @@ let infoTimer: ReturnType<typeof setInterval> | undefined;
 let launchTimer: ReturnType<typeof setInterval> | undefined;
 let checkingLaunch = false;
 let closing = false;
+let releaseViewListener: (() => void) | undefined;
 async function checkLaunch() {
   if (checkingLaunch || closing || !ready || instanceId === 'main') return;
   checkingLaunch = true;
-  const busy = connecting || connected || editing || savingTrust;
+  const busy = connecting || connected || disconnecting || editing || savingTrust;
   const mine = generation;
   try {
     const profile = await window.anas.backend.call('profiles.consumeLaunch', { id: instanceId, location }) as Profile | null;
-    if (!profile || busy || closing || mine !== generation || connecting || connected || editing || savingTrust) return;
+    if (!profile || busy || closing || mine !== generation || connecting || connected || disconnecting || editing || savingTrust) return;
     selectProfile(profile);
     if (profile.hasPassword) void connect();
     else { status('status.password_required'); input('password').focus(); }
   } catch (error) { if (!busy && !closing) profileFailure(error); }
   finally { checkingLaunch = false; }
 }
-window.addEventListener('pagehide', () => { closing = true; clearInterval(infoTimer); clearInterval(launchTimer); void disconnect(); });
+window.addEventListener('pagehide', () => { closing = true; releaseViewListener?.(); releaseToolbarListener?.(); clearInterval(infoTimer); clearInterval(launchTimer); void disconnect(); });
 
 function translateTrust() {
   if (pendingTrust) element('trust-message').textContent = t('certificate.verify', { host: pendingTrust.host, port: pendingTrust.port });
@@ -424,6 +465,7 @@ function translate() {
   element('desktop').setAttribute('aria-label', t('plugin.name'));
   element('title').textContent = instanceId === 'main' ? (editorOpen ? selected?.name ?? t('profiles.new') : t('plugin.name')) : selected?.name ?? t('plugin.name');
   document.title = instanceId === 'main' ? t('plugin.name') : selected?.name ?? t('plugin.name');
+  element('toolbar-error').textContent = t('errors.toolbar');
   status(statusKey);
   if (errorKey) element('error').textContent = t(errorKey);
   translateTrust();
@@ -444,13 +486,22 @@ async function syncInfo() {
 }
 
 try {
-  if (!window.anas.getLanguageResources || !window.anas.openView) { failure('errors.host_update'); throw new Error('HOST_UPDATE'); }
   const languages = await window.anas.getLanguageResources();
   await initializeLanguages(languages.resources);
   element('language-warning').hidden = languages.errors.length === 0;
+  releaseToolbarListener = window.anas.onToolbarAction(async id => {
+    if (id !== 'disconnect' || (!connecting && !connected)) return;
+    await disconnect();
+  });
+  let viewChanged = false;
+  releaseViewListener = window.anas.onViewChanged(view => {
+    viewChanged = true;
+    instanceId = view.instanceId;
+    location = view.location;
+    presentation();
+  });
   const info = await window.anas.getInfo();
-  instanceId = info.view?.instanceId ?? 'main';
-  location = info.view?.location ?? 'sidebar';
+  if (!viewChanged) { instanceId = info.view.instanceId; location = info.view.location; }
   document.body.dataset.manager = String(instanceId === 'main');
   await syncInfo();
   await refreshProfiles(instanceId === 'main' ? undefined : instanceId);
@@ -464,4 +515,4 @@ try {
     void syncInfo().catch(() => {});
     void checkLaunch();
   });
-} catch (error) { if (String(error).includes('HOST_UPDATE')) { /* Upgrade message is already visible. */ } else if (String(error).includes('PROFILE_')) profileFailure(error); else failure('errors.load'); }
+} catch (error) { if (String(error).includes('PROFILE_')) profileFailure(error); else failure('errors.load'); }

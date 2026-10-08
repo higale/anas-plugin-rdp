@@ -8,6 +8,7 @@
     "name": "Remote Desktop"
   },
   "status": {
+    "disconnecting": "Disconnecting…",
     "idle": "Disconnected",
     "disconnected": "Disconnected",
     "opened": "Connection page opened",
@@ -21,13 +22,13 @@
     "password_required": "Enter a password, then connect"
   },
   "errors": {
+    "toolbar": "Window controls could not be updated. Connection controls remain available below.",
     "conflict": "This profile changed in another page. Reload before editing.",
     "missing": "This profile was deleted. Reopen the home page from the top plugin menu.",
     "password": "The saved password cannot be decrypted. Enter and save it again.",
     "read": "Cannot read profiles. The original file is preserved. Check it or restore a backup.",
     "profile": "Profile operation failed. Check the fields or try again.",
     "cleanup": "Connection cleanup failed. Disable the plugin.",
-    "host_update": "Update Anas to a version supporting plugin language packs, profile pages, and home locations.",
     "interrupted": "The remote connection was interrupted.",
     "connection": "Connection failed. Check the address, credentials, and remote service.",
     "trust": "Could not save certificate trust. Try again.",

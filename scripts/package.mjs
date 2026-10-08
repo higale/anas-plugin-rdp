@@ -49,7 +49,8 @@ if (existsSync(archive)) unlinkSync(archive);
 // Enumerate the package roots: archiving '.' adds ./ entries that Explorer
 // cannot expose and that Anas correctly rejects as non-canonical paths.
 if (process.platform === 'win32') execFileSync('tar.exe', ['-a', '-c', '-f', archive, '-C', source, ...topLevel], { stdio: 'inherit' });
-else if (process.platform === 'darwin') execFileSync('/usr/bin/ditto', ['-c', '-k', source, archive], { stdio: 'inherit' });
+// File-system metadata must not become extra AppleDouble entries in the ZIP.
+else if (process.platform === 'darwin') execFileSync('/usr/bin/ditto', ['-c', '-k', '--norsrc', '--noqtn', source, archive], { stdio: 'inherit' });
 else if (process.platform === 'linux' && universal) execFileSync('zip', ['-q', '-r', archive, ...topLevel], { cwd: source, stdio: 'inherit' });
 else throw new Error('Packaging is only supported on Windows and macOS.');
 const sha256 = createHash('sha256').update(readFileSync(archive)).digest('hex');

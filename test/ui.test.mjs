@@ -1,13 +1,11 @@
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
+import { JSDOM } from 'jsdom';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { build } from 'esbuild';
 
-const upstream = createRequire(resolve('.local/upstream/IronRDP/web-client/iron-remote-desktop/package.json'));
-const { JSDOM } = upstream('jsdom');
 const html = await readFile('src/ui/index.html', 'utf8');
 const languageResources = Object.fromEntries(await Promise.all(['en', 'zh-CN'].map(async code => [code, JSON.parse(await readFile(`lang/${code}.json`, 'utf8'))])));
 const compiled = await build({
@@ -50,8 +48,14 @@ async function fixture(t, options = {}) {
   let attempts = 0;
   let profile = { id: 'fixture', revision: 1, name: 'Fixture', host: 'test.invalid', port: 3389, username: 'fixture', domain: '', openMode: 'sidebar', hasPassword: false, ...options.profile };
   let profiles = options.empty ? [] : [profile, ...(options.extraProfiles ?? [])];
-  const info = { language: 'en', theme: 'dark', fontSize: 14, view: { instanceId: options.manager ? 'main' : profile.id, location: 'sidebar' } };
+  const info = { language: 'en', theme: 'dark', fontSize: 14, view: { instanceId: options.manager ? 'main' : profile.id, location: options.location ?? 'sidebar' } };
+  let viewListener;
+  let toolbarListener;
+  let toolbar;
   window.anas = {
+    onViewChanged: listener => { viewListener = listener; return () => { viewListener = undefined; }; },
+    setToolbar: async value => { await options.toolbar?.(value); toolbar = value; },
+    onToolbarAction: listener => { toolbarListener = listener; return () => { toolbarListener = undefined; }; },
     getInfo: async () => info,
     getLanguageResources: async () => ({ resources: { ...languageResources, ...options.languages }, errors: [] }),
     openView: async params => { calls.push({method:'openView',params}); if (options.openError) throw new Error('Open failed'); },
@@ -102,7 +106,7 @@ async function fixture(t, options = {}) {
   await window.eval(`(async () => { ${compiled.outputFiles[0].text} })()`);
   element('host').value = 'test.invalid';
   element('username').value = 'fixture';
-  return { window, info, element, calls, errors, submit: () => element('connection').dispatchEvent(new window.Event('submit', { cancelable: true })) };
+  return { window, info, element, calls, errors, toolbar: () => toolbar, action: id => toolbarListener?.(id), hasToolbarListener: () => !!toolbarListener, move: location => { info.view.location = location; viewListener?.(info.view); }, hasViewListener: () => !!viewListener, submit: () => element('connection').dispatchEvent(new window.Event('submit', { cancelable: true })) };
 }
 
 test('a delayed failed connection cannot disconnect a newer session or display its certificate', async t => {
@@ -367,4 +371,75 @@ test('a deleted server in a stale home list cannot be started or recreated', asy
   assert.match(home.element('error').textContent, /deleted/);
   assert.equal(home.calls.some(call => call.method === 'openView'), false);
   assert.deepEqual(await store.call('profiles.list', {}), []);
+});
+
+test('moving a connected page preserves its session and consumes launch requests at the new location', async t => {
+  const ui = await fixture(t);
+  ui.submit();
+  await until(() => ui.element('status').textContent === 'Connected');
+  for (const location of ['window', 'sidebar', 'window']) {
+    ui.move(location);
+    const start = ui.calls.length;
+    ui.window.dispatchEvent(new ui.window.Event('focus'));
+    await until(() => ui.calls.slice(start).some(call => call.method === 'profiles.consumeLaunch' && call.params.location === location));
+    assert.equal(ui.element('status').textContent, 'Connected');
+  }
+  assert.equal(ui.calls.filter(call => call.method === 'create').length, 1);
+  assert.equal(ui.calls.filter(call => call.method === 'disconnect').length, 0);
+  assert.equal(ui.hasViewListener(), true);
+  ui.window.dispatchEvent(new ui.window.Event('pagehide'));
+  await until(() => ui.calls.filter(call => call.method === 'disconnect').length === 1);
+  assert.equal(ui.hasViewListener(), false);
+});
+
+
+test('window toolbar follows the live connection without recreating it when moved', async t => {
+  const ui = await fixture(t);
+  assert.equal(ui.element('connection-header').hidden, false);
+  ui.submit();
+  await until(() => ui.toolbar()?.status.label === 'Connected');
+  const desktop = ui.element('desktop').firstElementChild;
+  for (const location of ['window', 'sidebar', 'window']) {
+    ui.move(location);
+    await until(() => ui.element('connection-header').hidden === (location === 'window'));
+    assert.equal(ui.element('desktop').firstElementChild, desktop);
+    assert.equal(ui.toolbar().actions[0].disabled, false);
+  }
+  assert.equal(ui.calls.filter(call => call.method === 'create').length, 1);
+  assert.equal(ui.calls.filter(call => call.method === 'disconnect').length, 0);
+  await ui.action('disconnect');
+  await until(() => ui.toolbar().status.label === 'Disconnected');
+  assert.equal(ui.toolbar().actions[0].disabled, true);
+  assert.equal(ui.calls.filter(call => call.method === 'disconnect').length, 1);
+  assert.equal(ui.element('desktop').firstElementChild, null);
+});
+
+test('titlebar cancel prevents a delayed handshake from restoring a canceled session', async t => {
+  const handshake = deferred();
+  const ui = await fixture(t, { location: 'window', connect: () => handshake.promise });
+  ui.submit();
+  await until(() => ui.calls.some(call => call.method === 'create'));
+  assert.equal(ui.toolbar().actions[0].label, 'Cancel');
+  assert.equal(ui.toolbar().actions[0].icon, 'x');
+  await ui.action('disconnect');
+  handshake.resolve({ run: () => new Promise(() => {}) });
+  await until(() => ui.toolbar().status.label === 'Disconnected');
+  assert.equal(ui.element('connect').disabled, false);
+  assert.equal(ui.toolbar().actions[0].disabled, true);
+});
+
+test('a rejected toolbar update keeps connection controls visible and reports failure', async t => {
+  const ui = await fixture(t, { location: 'window', toolbar: () => { throw new Error('Unavailable'); } });
+  await until(() => !ui.element('toolbar-error').hidden);
+  assert.equal(ui.element('connection-header').hidden, false);
+  assert.match(ui.element('toolbar-error').textContent, /controls could not be updated/i);
+});
+
+test('home keeps its header and page teardown unregisters action listeners', async t => {
+  const ui = await fixture(t, { manager: true, location: 'window' });
+  assert.equal(ui.toolbar(), null);
+  assert.equal(ui.element('connection-header').hidden, false);
+  assert.equal(ui.hasToolbarListener(), true);
+  ui.window.dispatchEvent(new ui.window.Event('pagehide'));
+  assert.equal(ui.hasToolbarListener(), false);
 });

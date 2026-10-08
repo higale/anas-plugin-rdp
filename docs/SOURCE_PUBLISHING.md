@@ -31,4 +31,4 @@
 
 Release 仅提供 `anas-rdp-<version>-universal.zip` 与一份 `SHA256SUMS.txt`；各组件 ZIP、独立摘要和逐文件清单只作为 Actions 内部验证产物保留 14 天。GitHub 自动生成的源码下载项不属于插件安装包。
 
-Actions 使用 GitHub 提供的 GITHUB_TOKEN；不上传真实 RDP 配置，不需要 RDP 密码或 Apple 证书。当前插件要求 Anas 3.3.4 或更新版本，使用页面实例、插件语言包及首页位置接口，可选语种仅来自宿主语言包。插件和宿主分别同步和发布，发布插件不自动发布宿主。
+Actions 使用 GitHub 提供的 GITHUB_TOKEN；不上传真实 RDP 配置，不需要 RDP 密码或 Apple 证书。当前插件要求 Anas 3.3.5 或更新版本，使用页面实例、插件语言包、首页位置、窗口移动及标题栏操作接口，可选语种仅来自宿主语言包。插件和宿主分别同步和发布，发布插件不自动发布宿主。
