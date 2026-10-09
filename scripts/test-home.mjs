@@ -25,9 +25,10 @@ async function openHome() {
   }
   await page.getByRole('button', { name: 'Plugins', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Remote Desktop', exact: true }).click();
-  // The host delivers sidebar opening asynchronously. Wait for selection before
-  // navigating to settings, even when the home page already exists.
-  if (await storedLocation() !== 'window') {
+  // An existing home keeps its placement even when the saved preference changes.
+  const homes = () => page.evaluate(() => window.gale.panels.list().then(views => views.filter(view => view.content.pluginId === 'rdp' && view.content.instanceId === 'main')));
+  await expect.poll(async () => (await homes()).length).toBe(1);
+  if ((await homes())[0].location === 'sidebar') {
     await expect(page.getByRole('tab', { name: 'Remote Desktop', exact: true })).toHaveAttribute('aria-selected', 'true');
     await pluginPage(application, 'rdp');
   }
@@ -51,7 +52,7 @@ async function install() {
   await page.evaluate(() => window.gale.plugins.install());
 }
 async function storedLocation() {
-  const saved = await readFile(join(data, 'plugin_data/rdp/state.json'), 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  const saved = await readFile(join(data, 'plugins_data/rdp/state.json'), 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
   return saved === null ? null : JSON.parse(saved).values.home_open_location;
 }
 try {
@@ -61,7 +62,7 @@ try {
   await page.locator('[data-agent-composer-input]').waitFor();
   await install();
   await openHome();
-  const frame = await pluginPage(application, 'rdp');
+  let frame = await pluginPage(application, 'rdp');
   await expect(frame.locator('#new')).toBeEnabled({ timeout: 20000 });
   assert.equal(await windowCount(application), 1);
   assert.equal(await storedLocation(), null);
@@ -110,8 +111,16 @@ try {
   await setHomeLocation('window');
   await page.screenshot({ path: join(directory, 'plugin-settings.png') });
   await openHome();
+  assert.equal(await windowCount(application), 1, 'Changing the preference must reuse the existing sidebar home');
+  assert.equal((await frame.evaluate(() => anas.getInfo())).view.location, 'sidebar');
+  await page.evaluate(async () => {
+    const home = (await window.gale.panels.list()).find(view => view.content.pluginId === 'rdp' && view.content.instanceId === 'main');
+    await window.gale.panels.close(home.viewId);
+  });
+  await openHome();
   await expect.poll(() => windowCount(application)).toBe(2);
   const popup = await pluginPage(application, 'rdp', 'main', 'window');
+  frame = popup;
   await expect(popup.locator('#new')).toBeEnabled({ timeout: 20000 });
   await expect(popup.locator('.profile-select strong')).toHaveText(['Second server', 'Synthetic server']);
   await popup.locator('#new').click();
@@ -119,6 +128,12 @@ try {
   await openHome();
   assert.equal(await windowCount(application), 2);
   await expect(popup.locator('#name')).toHaveValue('Unsaved home form');
+  await setHomeLocation('sidebar');
+  await openHome();
+  assert.equal(await windowCount(application), 2);
+  assert.equal((await popup.evaluate(() => anas.getInfo())).view.location, 'window');
+  await expect(popup.locator('#name')).toHaveValue('Unsaved home form');
+  await popup.locator('#cancel-edit').click();
   await frame.locator('.profile-select').last().focus();
   await frame.locator('#profiles li').last().hover();
   await frame.locator('[data-action="start"]').last().click();
@@ -152,10 +167,8 @@ try {
   await connection.locator('#save').click();
   await expect(connection.locator('#status')).toHaveText('Profile saved');
   await openHome();
-  await expect(popup.locator('#name')).toHaveValue('Unsaved home form');
   assert.equal(await windowCount(application), 3);
-  await setHomeLocation('sidebar');
-  await openHome();
+  assert.equal((await frame.evaluate(() => anas.getInfo())).view.location, 'window');
   await expect(frame.locator('#profiles')).toBeVisible();
   // The existing home still has the earlier revision and window location.
   await expect(frame.locator('.profile-select strong').last()).toHaveText('Synthetic server');
@@ -173,11 +186,16 @@ try {
   await expect(frame.locator('.profile-select strong').last()).toHaveText('Updated server');
   await expect(frame.locator('#error')).toBeHidden();
   results.push('Edit and save in the connection window, return to an existing home and Start uses the latest revision, name and sidebar placement without a false conflict');
-  await setHomeLocation('window');
   await popup.screenshot({ path: join(directory, 'home-window.png') });
-  await page.getByRole('button', { name: 'Back to app', exact: true }).click();
+  const homeIdentity = await frame.evaluate(() => globalThis.homeIdentity = crypto.randomUUID());
+  await frame.evaluate(() => anas.moveView('sidebar'));
+  await expect.poll(() => windowCount(application)).toBe(2);
+  await setHomeLocation('window');
+  await openHome();
+  assert.equal(await frame.evaluate(() => globalThis.homeIdentity), homeIdentity);
+  assert.equal((await frame.evaluate(() => anas.getInfo())).view.location, 'sidebar');
   await frame.screenshot({ path: join(directory, 'home-sidebar.png') });
-  results.push('Top menu opens the configured home directly; repeat clicks and returning from a connection reuse it without losing forms; server placement remains independent');
+  results.push('One home is reused across placements and preference changes without losing forms; closing it allows the new preference; business pages keep independent placement');
   await (await pluginWindow(application, connection)).close();
   await application.close();
   await launch();
@@ -218,7 +236,7 @@ try {
   await page.screenshot({ path: join(directory, 'uninstall-delete-data.png') });
   await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.gale.plugins.list())).toEqual([]);
-  await assert.rejects(stat(join(data, 'plugin_data/rdp')), { code: 'ENOENT' });
+  await assert.rejects(stat(join(data, 'plugins_data/rdp')), { code: 'ENOENT' });
   await install();
   assert.deepEqual(await page.evaluate(() => window.gale.plugins.invoke('rdp', 'backend.call', { method: 'profiles.list', params: {} })), []);
   results.push('The setting lives in host plugin settings; uninstall keeps data by default and deletes profiles plus preferences only when explicitly checked');

@@ -140,7 +140,7 @@ try {
   await managerFrame.evaluate(async id => anas.openView({ instanceId: id, location: 'sidebar', title: 'RDP integration' }), profileId);
   assert.equal((await page.evaluate(() => window.gale.plugins.listViews())).filter(view => view.pluginId === 'rdp' && view.instanceId === profileId && view.location === 'sidebar').length, 1);
   await expect.poll(helperPids).toEqual([]);
-  const saved = JSON.parse(await readFile(join(directory, 'plugin_data/rdp/profiles.json'), 'utf8'));
+  const saved = JSON.parse(await readFile(join(directory, 'plugins_data/rdp/profiles.json'), 'utf8'));
   assert.equal(JSON.stringify(saved).includes(config.password), false);
   assert.equal(saved.profiles[0].password.version, 1);
   const profileCopy = await managerFrame.evaluate(async () => {
@@ -312,7 +312,7 @@ try {
   await expect.poll(helperPids).toEqual([]);
   phase = 'uninstall';
   await page.evaluate(() => globalThis.gale.plugins.uninstall('rdp'));
-  assert.ok((await readFile(join(directory, 'plugin_data/rdp/profiles.json'), 'utf8')).length);
+  assert.ok((await readFile(join(directory, 'plugins_data/rdp/profiles.json'), 'utf8')).length);
   await expect.poll(helperPids).toEqual([]);
   results.push('uninstall retains ordinary configuration and leaves no helper');
   phase = 'forced host termination';
