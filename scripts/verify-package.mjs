@@ -36,7 +36,7 @@ for (const file of inventory.files) {
   assert.equal(hash(readFileSync(path)), file.sha256);
 }
 if (process.platform === 'darwin') {
-  const helper = resolve(extracted, 'native', `${process.platform}-${process.arch}`, 'anas-rdp-bridge');
+  const helper = resolve(extracted, 'native', `${process.platform}-${process.arch}`, 'anas-rdp-session');
   assert.ok(lstatSync(helper).mode & 0o111, 'Native helper lost executable permissions');
   execFileSync('/usr/bin/codesign', ['--verify', '--strict', helper], { stdio: 'inherit' });
 }
@@ -52,6 +52,6 @@ if (variant === 'universal') {
 }
 assert.ok(manifest.platforms.includes(process.platform));
 assert.equal(manifest.plugin_version, version);
-await WebAssembly.compile(readFileSync(resolve(extracted, 'ironrdp_web_bg.wasm')));
+
 execFileSync(process.execPath, ['--test', 'test/backend.test.mjs'], { cwd: root, stdio: 'inherit', env: { ...process.env, RDP_TEST_PACKAGE: extracted } });
 console.log(`Verified ${inventory.files.length} archived files and native process lifecycle after extraction: ${extracted}`);

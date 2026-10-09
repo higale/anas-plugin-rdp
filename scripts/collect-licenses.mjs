@@ -20,20 +20,15 @@ function retain(ecosystem, item, directory, fallback) {
   if (!files.length && fallback) files = ['LICENSE-MIT', 'LICENSE-APACHE'].map(name => resolve(fallback, name));
   const supplement = resolve(root, 'third-party/license-supplements', `${item.name}-${item.version}`);
   if (!files.length && existsSync(supplement)) files = readdirSync(supplement).map(name => resolve(supplement, name));
-  // These published npm packages carry their license declaration in README only.
-  if (!files.length && ecosystem === 'npm' && ['is-reference', 'locate-character'].includes(item.name)) {
-    files = [resolve(directory, 'README.md'), resolve(directory, 'package.json')];
-  }
   const destination = resolve(output, key);
   mkdirSync(destination, { recursive: true });
   for (const path of new Set(files)) cpSync(path, resolve(destination, basename(path)));
   inventory.set(key, { name: item.name, version: item.version, license: item.license ?? null, repository: item.repository ?? null, notices: files.map(path => basename(path)) });
 }
 for (const [cwd, name, platform] of [
-  [resolve(root, 'native'), 'anas-rdp-bridge', `${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}-${process.platform === 'win32' ? 'pc-windows-msvc' : 'apple-darwin'}`],
-  [resolve(root, '.local/upstream/IronRDP'), 'ironrdp-web', 'wasm32-unknown-unknown'],
+  [resolve(root, 'native'), 'anas-rdp-session', `${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}-${process.platform === 'win32' ? 'pc-windows-msvc' : 'apple-darwin'}`],
 ]) {
-  if ((scope === 'web' && name !== 'ironrdp-web') || (scope === 'native' && name === 'ironrdp-web')) continue;
+  if (scope === 'web') continue;
   const metadata = JSON.parse(execFileSync('cargo', ['metadata', '--locked', '--format-version', '1', '--filter-platform', platform], { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
   const packages = new Map(metadata.packages.map(item => [item.id, item]));
   const nodes = new Map(metadata.resolve.nodes.map(item => [item.id, item]));
@@ -43,7 +38,7 @@ for (const [cwd, name, platform] of [
     if (seen.has(id)) return;
     seen.add(id);
     const pkg = packages.get(id);
-    if (id !== entry || name === 'ironrdp-web') {
+    if (id !== entry) {
       const directory = dirname(pkg.manifest_path);
       const fallback = directory.includes('IronRDP') || pkg.source?.includes('IronRDP') ? resolve(root, 'third-party/IronRDP') : undefined;
       retain('rust', pkg, directory, fallback);
@@ -52,8 +47,8 @@ for (const [cwd, name, platform] of [
   };
   visit(entry);
 }
-// Runtime libraries embedded by the upstream Web Component build.
-const npmRoot = resolve(root, '.local/upstream/IronRDP/web-client/iron-remote-desktop/node_modules');
+// Runtime JavaScript bundled with the plugin.
+const npmRoot = resolve(root, 'node_modules');
 const visitNpm = (name, modules = npmRoot) => {
   const directory = resolve(modules, name);
   const pkg = JSON.parse(readFileSync(resolve(directory, 'package.json'), 'utf8'));
@@ -63,8 +58,6 @@ const visitNpm = (name, modules = npmRoot) => {
   for (const dependency of Object.keys(pkg.dependencies ?? {})) if (existsSync(resolve(modules, dependency, 'package.json'))) visitNpm(dependency, modules);
 };
 if (scope !== 'native') {
-  visitNpm('svelte');
-  visitNpm('ua-parser-js');
   visitNpm('i18next', resolve(root, 'node_modules'));
 }
 const entries = [...inventory.entries()].sort(([a], [b]) => a.localeCompare(b));

@@ -23,12 +23,12 @@
 | macOS Apple Silicon | macos-15 | native-darwin-arm64 |
 | macOS Intel | macos-15-intel | native-darwin-x64 |
 
-公共 job 在 Windows 使用 Node 24、固定 Rust 及 wasm-pack，只执行一次 Web/WASM 和插件 JavaScript 构建、上游 137 项测试、类型检查、界面状态及配置存储回归。wasm-pack 从上游固定版本下载并校验锁定 SHA-256。三个 native job 只构建原生辅助程序、运行 8 项 Rust 测试／clippy、收集各自许可证；macOS 执行 ad-hoc 签名并验证，未公证。
+公共 job 构建一次共享 UI／JavaScript，运行类型检查、界面及配置回归。三个 native job 使用固定 Rust，构建原生会话程序并运行 workspace 测试与 clippy，收集各自许可证；macOS 执行 ad-hoc 签名并验证，未公证。
 
 公共组件与三个原生组件完成后，合并 job 验证源码提交、依赖锁、构建元数据及每个文件摘要一致性。以公共组件为基础加入三个原生程序，合并许可证；原生组件不携带重复 Web 资源。`PLUGIN.json` 声明 Windows/macOS，后台按 Node 运行时的操作系统和架构选择 helper。
 
-生成的 `anas-rdp-<version>-universal.zip` 再分别在 Windows、ARM Mac、Intel Mac 上解压，检查内容、WASM 编译、原生权限／签名及 helper 启动回收。只有全部成功才发布。真正的 macOS 远程认证、画面和输入由用户实机验证，不能用 CI 代替。
+生成的 `anas-rdp-<version>-universal.zip` 再分别在 Windows、ARM Mac、Intel Mac 上解压，检查内容、原生权限／签名及 helper 启动回收。只有全部成功才发布。各平台远程认证、画面和输入仍需实机验证，不能用 CI 代替。
 
 Release 仅提供 `anas-rdp-<version>-universal.zip` 与一份 `SHA256SUMS.txt`；各组件 ZIP、独立摘要和逐文件清单只作为 Actions 内部验证产物保留 14 天。GitHub 自动生成的源码下载项不属于插件安装包。
 
-Actions 使用 GitHub 提供的 GITHUB_TOKEN；不上传真实 RDP 配置，不需要 RDP 密码或 Apple 证书。当前插件要求 Anas 3.3.5 或更新版本，使用页面实例、插件语言包、首页位置、窗口移动及标题栏操作接口，可选语种仅来自宿主语言包。插件和宿主分别同步和发布，发布插件不自动发布宿主。
+Actions 使用 GitHub 提供的 GITHUB_TOKEN；不上传真实 RDP 配置，不需要 RDP 密码或 Apple 证书。RDP 0.1.7 最低要求 Anas 3.3.8（插件 API 2）；配套发布时先同步宿主，再同步插件。后续发布须重新核对宿主最低版本，可选语种仅来自宿主语言包。插件和宿主分别同步和发布，发布插件不自动发布宿主。

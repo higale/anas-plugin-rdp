@@ -5,3 +5,7 @@
 *.wasm binary
 *.exe binary
 *.zip binary
+
+# 保留锁定上游文档和清单的原始空白，便于核对本地 TLS 补丁。
+native/vendor/ironrdp-tls/CHANGELOG.md whitespace=-blank-at-eol
+native/vendor/ironrdp-tls/Cargo.toml whitespace=-blank-at-eof

@@ -126,10 +126,10 @@ test('launch requests are scoped, single-use, cancellable and never survive back
   const consume = (location='window') => store.call('profiles.consumeLaunch', { id:profile.id,location });
   assert.equal(await consume(), null);
   const oldToken = await store.call('profiles.launch', profile);
-  assert.equal(await consume('sidebar'), null);
+  assert.equal(await store.call('profiles.consumeLaunch', { id: '00000000-0000-0000-0000-000000000000', location: 'sidebar' }), null);
   const token = await store.call('profiles.launch', profile);
   await store.call('profiles.cancelLaunch', { id:profile.id,location:'window',token:oldToken });
-  assert.deepEqual(await consume(), profile);
+  assert.deepEqual(await consume('sidebar'), profile); // A moved page consumes the same profile's launch.
   assert.equal(await consume(), null);
   await store.call('profiles.launch', profile);
   assert.equal(await new Profiles(directory).call('profiles.consumeLaunch', { id:profile.id,location:'window' }), null);
@@ -156,4 +156,104 @@ test('expired launches and changed or deleted profiles cannot connect', async t 
   await store.call('profiles.launch', next);
   await store.call('profiles.delete', next);
   await assert.rejects(consume(), /PROFILE_MISSING/);
+});
+
+
+test('getting the latest profile is read-only, omits secrets, and rejects deleted profiles', async t => {
+  const { store, directory } = await fixture(t);
+  const original = await store.call('profiles.save', { ...fields, passwordAction: 'set', password: 'saved-only' });
+  const latest = await store.call('profiles.save', { ...original, host: 'latest.invalid', passwordAction: 'keep' });
+  const before = await readFile(join(directory, 'profiles.json'), 'utf8');
+  assert.deepEqual(await store.call('profiles.get', { id: original.id }), latest);
+  assert.equal(await readFile(join(directory, 'profiles.json'), 'utf8'), before);
+  await store.call('profiles.delete', latest);
+  await assert.rejects(store.call('profiles.get', { id: original.id }), /PROFILE_MISSING/);
+});
+
+
+test('connection password saves only the credential and survives a portable backup', async t => {
+  const { store, directory, read } = await fixture(t);
+  const original = await store.call('profiles.save', { ...fields, domain: 'fixture-domain', openMode: 'window' });
+  const second = await store.call('profiles.save', { ...fields, name: 'Second' });
+  const trust = { host: original.host, port: original.port, sha256: 'a'.repeat(64) };
+  await store.call('trusts.save', trust);
+  const password = 'connection-secret-测试';
+  const saved = await store.call('profiles.savePassword', { id: original.id, revision: original.revision, password, host: 'ignored.invalid' });
+  assert.deepEqual(saved, { ...original, revision: original.revision + 1, hasPassword: true });
+  assert.deepEqual(await store.call('profiles.list', {}), [saved, second]);
+  assert.deepEqual(await store.call('trusts.list', {}), [trust]);
+  assert.equal(JSON.stringify(await read()).includes(password), false);
+  assert.equal(JSON.stringify(saved).includes(password), false);
+  const backup = await fixture(t);
+  await cp(join(directory, 'profiles.json'), join(backup.directory, 'profiles.json'));
+  assert.equal(await backup.store.call('profiles.password', saved), password);
+  const empty = await store.call('profiles.savePassword', { id: saved.id, revision: saved.revision, password: '' });
+  assert.equal(empty.hasPassword, true);
+  assert.equal(await store.call('profiles.password', empty), '');
+});
+
+test('password-only saves reject stale, invalid and deleted targets without overwriting or recreating them', async t => {
+  const { store, directory } = await fixture(t);
+  const original = await store.call('profiles.save', fields);
+  const changed = await store.call('profiles.save', { ...original, name: 'Changed', passwordAction: 'keep' });
+  const before = await readFile(join(directory, 'profiles.json'), 'utf8');
+  await assert.rejects(store.call('profiles.savePassword', { ...original, password: 'stale' }), /PROFILE_CONFLICT/);
+  for (const password of [null, 12, 'x'.repeat(4097)]) {
+    await assert.rejects(store.call('profiles.savePassword', { ...changed, password }), /PROFILE_INVALID/);
+  }
+  await assert.rejects(store.call('profiles.savePassword', { password: 'missing-id' }), /PROFILE_MISSING/);
+  assert.equal(await readFile(join(directory, 'profiles.json'), 'utf8'), before);
+  await store.call('profiles.delete', changed);
+  await assert.rejects(store.call('profiles.savePassword', { ...changed, password: 'deleted' }), /PROFILE_MISSING/);
+  assert.deepEqual(await store.call('profiles.list', {}), []);
+});
+
+test('remembering placement changes only the latest open mode, preserves credentials, and keeps a valid launch', async t => {
+  const { store, read } = await fixture(t);
+  const original = await store.call('profiles.save', { ...fields, passwordAction: 'set', password: 'synthetic-position-password' });
+  const edited = await store.call('profiles.save', { ...original, name: 'Latest name', passwordAction: 'keep' });
+  const cipher = (await read()).profiles[0].password;
+  await store.call('profiles.launch', edited);
+  const placed = await store.call('profiles.setOpenMode', { id: edited.id, openMode: 'window' });
+  assert.deepEqual(placed, { ...edited, openMode: 'window', revision: edited.revision + 1 });
+  assert.deepEqual((await read()).profiles[0].password, cipher);
+  assert.equal(await store.call('profiles.password', placed), 'synthetic-position-password');
+  assert.deepEqual(await store.call('profiles.consumeLaunch', { id: edited.id }), placed);
+  assert.deepEqual(await store.call('profiles.setOpenMode', { id: edited.id, openMode: 'window' }), placed);
+});
+
+test('placement does not revive a deleted profile or validate a launch made stale by other edits', async t => {
+  const { store } = await fixture(t);
+  const original = await store.call('profiles.save', fields);
+  await store.call('profiles.launch', original);
+  const edited = await store.call('profiles.save', { ...original, name: 'Changed after Start', passwordAction: 'keep' });
+  const placed = await store.call('profiles.setOpenMode', { id: edited.id, openMode: 'window' });
+  await assert.rejects(store.call('profiles.consumeLaunch', { id: edited.id }), /PROFILE_CONFLICT/);
+  await store.call('profiles.delete', placed);
+  assert.equal(await store.call('profiles.setOpenMode', { id: edited.id, openMode: 'sidebar' }), null);
+  assert.deepEqual(await store.call('profiles.list', {}), []);
+});
+
+
+test('background running is optional, defaults off and preserves explicit choices across updates and copies', async t => {
+  const { store, directory, read } = await fixture(t);
+  let profile = await store.call('profiles.save', { ...fields, passwordAction: 'set', password: 'synthetic' });
+  assert.equal(profile.runInBackground, false);
+  const old = await read(); delete old.profiles[0].run_in_background;
+  await writeFile(join(directory, 'profiles.json'), JSON.stringify(old));
+  assert.equal((await store.call('profiles.get', profile)).runInBackground, false);
+  assert.equal((await read()).profiles[0].run_in_background, undefined, 'Normal reads do not migrate or rewrite the old profile.');
+  for (const value of [null, 0, 'true']) await assert.rejects(store.call('profiles.save', { ...profile, runInBackground: value, passwordAction: 'keep' }), /PROFILE_INVALID/);
+  profile = await store.call('profiles.save', { ...profile, runInBackground: true, passwordAction: 'keep' });
+  assert.equal(profile.runInBackground, true);
+  assert.equal((await read()).profiles[0].run_in_background, true);
+  assert.equal((await read()).version, 0);
+  const moved = await store.call('profiles.setOpenMode', { id: profile.id, openMode: 'window' });
+  assert.equal(moved.runInBackground, true);
+  const copy = await store.call('profiles.copy', { ...moved, name: 'Copy' });
+  assert.equal(copy.runInBackground, true);
+  const disabled = await store.call('profiles.save', { ...moved, runInBackground: false, passwordAction: 'keep' });
+  assert.equal(disabled.runInBackground, false);
+  assert.equal(await store.call('profiles.password', disabled), 'synthetic');
+  assert.equal((await read()).profiles[0].run_in_background, false);
 });

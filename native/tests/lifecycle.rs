@@ -4,14 +4,16 @@ use std::time::Duration;
 use futures_util::SinkExt;
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
-async fn launch() -> (Child, ChildStdin, u16) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_anas-rdp-bridge"))
-        .arg("--serve")
+async fn launch() -> (Child, ChildStdin, u16, TcpListener) {
+    // Keep negotiation pending independently of DNS or a real RDP server.
+    let peer = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_anas-rdp-session"))
+        .arg("--session")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -19,7 +21,7 @@ async fn launch() -> (Child, ChildStdin, u16) {
         .spawn()
         .unwrap();
     let mut input = child.stdin.take().unwrap();
-    input.write_all(format!("{}\n", json!({"host":"test.invalid","port":3389,"origin":"anas-plugin://rdp","token":"a".repeat(64)})).as_bytes()).await.unwrap();
+    input.write_all(format!("{}\n", json!({"host":"127.0.0.1","port":peer.local_addr().unwrap().port(),"username":"test","password":"test","origin":"anas-plugin://display","token":"a".repeat(64)})).as_bytes()).await.unwrap();
     let mut line = String::new();
     timeout(
         Duration::from_secs(5),
@@ -30,12 +32,12 @@ async fn launch() -> (Child, ChildStdin, u16) {
     .unwrap();
     let event: serde_json::Value = serde_json::from_str(&line).unwrap();
     let port = event["port"].as_u64().unwrap() as u16;
-    (child, input, port)
+    (child, input, port, peer)
 }
 
 #[tokio::test]
 async fn owner_pipe_closure_reclaims_listener_and_process() {
-    let (mut child, input, port) = launch().await;
+    let (mut child, input, port, _peer) = launch().await;
     drop(input);
     assert!(
         timeout(Duration::from_secs(3), child.wait())
@@ -49,8 +51,8 @@ async fn owner_pipe_closure_reclaims_listener_and_process() {
 
 #[tokio::test]
 async fn rejects_foreign_origin_then_accepts_bound_origin() {
-    let (mut child, input, port) = launch().await;
-    let url = format!("ws://127.0.0.1:{port}/rdp");
+    let (mut child, input, port, _peer) = launch().await;
+    let url = format!("ws://127.0.0.1:{port}/display");
     let mut request = url.clone().into_client_request().unwrap();
     request
         .headers_mut()
@@ -59,11 +61,23 @@ async fn rejects_foreign_origin_then_accepts_bound_origin() {
     let mut request = url.into_client_request().unwrap();
     request
         .headers_mut()
-        .insert("Origin", "anas-plugin://rdp".parse().unwrap());
+        .insert("Origin", "anas-plugin://display".parse().unwrap());
+    request.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        format!("anas-rdp, {}, test-page", "a".repeat(64))
+            .parse()
+            .unwrap(),
+    );
     let (mut ws, _) = tokio_tungstenite::connect_async(request).await.unwrap();
     ws.send(Message::Binary(vec![0; 64 * 1024 + 1].into()))
         .await
         .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "A display failure must not terminate the session resource."
+    );
+    drop(input);
     assert!(
         timeout(Duration::from_secs(3), child.wait())
             .await
@@ -71,6 +85,19 @@ async fn rejects_foreign_origin_then_accepts_bound_origin() {
             .unwrap()
             .success()
     );
-    drop(input);
+    assert!(TcpStream::connect(("127.0.0.1", port)).await.is_err());
+}
+
+#[tokio::test]
+async fn terminal_remote_failure_reclaims_listener_without_waiting_for_owner() {
+    let (mut child, _input, port, peer) = launch().await;
+    drop(peer);
+    assert!(
+        timeout(Duration::from_secs(5), child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success()
+    );
     assert!(TcpStream::connect(("127.0.0.1", port)).await.is_err());
 }

@@ -19,11 +19,13 @@
     "reloaded": "Profile reloaded",
     "deleted": "Profile deleted",
     "reordered": "Order saved",
-    "password_required": "Enter a password, then connect"
+    "password_required": "Enter a password, then connect",
+    "copied": "Profile copied",
+    "unknown": "Status unknown"
   },
   "errors": {
     "toolbar": "Window controls could not be updated. Connection controls remain available below.",
-    "conflict": "This profile changed in another page. Reload before editing.",
+    "conflict": "This profile changed. Reload to continue.",
     "missing": "This profile was deleted. Reopen the home page from the top plugin menu.",
     "password": "The saved password cannot be decrypted. Enter and save it again.",
     "read": "Cannot read profiles. The original file is preserved. Check it or restore a backup.",
@@ -33,7 +35,16 @@
     "connection": "Connection failed. Check the address, credentials, and remote service.",
     "trust": "Could not save certificate trust. Try again.",
     "load": "Component loading failed. Reopen the plugin.",
-    "language": "Some language files could not be loaded. Check the plugin language files in Anas Settings > Plugins."
+    "language": "Some language files could not be loaded. Check the plugin language files in Anas Settings > Plugins.",
+    "open_profiles": "Could not open the server list. Try again.",
+    "conflict_editor": "This profile changed. Reloading discards unsaved edits.",
+    "active": "Disconnect this server before editing or deleting its profile.",
+    "sessions": "Cannot read connection status. Editing and deletion are unavailable while retrying.",
+    "session_ended": "The previous connection ended. Start the server again.",
+    "profile_open": "Close this server’s connection page before editing its profile.",
+    "profile_editing": "Save or cancel this server’s edits before opening its connection page.",
+    "location_save": "The desktop position changed, but its opening preference could not be saved. Try again.",
+    "move": "Could not move the desktop. Its original page is preserved."
   },
   "actions": {
     "cancel": "Cancel",
@@ -42,20 +53,31 @@
     "copy": "Copy",
     "delete": "Delete",
     "save": "Save",
-    "reload": "Reload",
     "connect": "Connect",
     "add_server": "Add server",
     "start": "Start",
     "edit": "Edit",
     "up": "Move up",
-    "down": "Move down"
+    "down": "Move down",
+    "servers": "Server list",
+    "reconnect": "Reconnect",
+    "retry": "Retry",
+    "reload": "Reload",
+    "resume": "Resume desktop",
+    "start_sidebar": "Start in sidebar",
+    "start_window": "Start in window",
+    "resume_sidebar": "Resume in sidebar",
+    "resume_window": "Resume in window"
   },
   "profiles": {
     "password_saved": "Saved; leave blank to keep",
     "new": "New profile",
     "copy_name": "{{name}} copy",
     "empty": "No servers yet.",
-    "delete_confirm": "Delete “{{name}}” and its saved password? Existing connections will stay open."
+    "delete_confirm": "Delete “{{name}}” and its saved password?",
+    "password_available": "Leave blank to use the saved password",
+    "edit": "Edit: {{name}}",
+    "removed": "Profile deleted"
   },
   "fields": {
     "profiles": "Server profiles",
@@ -66,7 +88,8 @@
     "port": "Port",
     "username": "Username",
     "domain": "Domain (optional)",
-    "password": "Password"
+    "password": "Password",
+    "run_in_background": "Run in background (keep connected after closing the desktop)"
   },
   "modes": {
     "sidebar": "Sidebar",

@@ -19,11 +19,13 @@
     "reloaded": "配置已重新加载",
     "deleted": "配置已删除",
     "reordered": "顺序已保存",
-    "password_required": "请输入密码，然后连接"
+    "password_required": "请输入密码，然后连接",
+    "copied": "配置已复制",
+    "unknown": "状态未知"
   },
   "errors": {
     "toolbar": "窗口操作更新失败，请使用下方的连接操作。",
-    "conflict": "配置已在其他页面修改，请重新加载后编辑。",
+    "conflict": "配置已变更，请重新加载。",
     "missing": "配置已删除，请从顶部插件菜单返回首页。",
     "password": "保存的密码无法解密，请重新输入并保存。",
     "read": "配置读取失败，原文件已保留。请检查文件或恢复备份。",
@@ -33,7 +35,16 @@
     "connection": "连接失败，请检查地址、账户和远程服务。",
     "trust": "证书信任保存失败，请重试。",
     "load": "组件加载失败，请重新打开插件。",
-    "language": "部分语言文件无法加载，请在 Anas 设置 → 插件中查看详情。"
+    "language": "部分语言文件无法加载，请在 Anas 设置 → 插件中查看详情。",
+    "open_profiles": "无法打开服务器列表，请重试。",
+    "conflict_editor": "配置已变更，重新加载将放弃未保存的修改。",
+    "active": "服务器尚未停止，请先断开连接再编辑或删除。",
+    "sessions": "无法读取连接状态，编辑和删除暂不可用，正在重试。",
+    "session_ended": "原连接已结束，请重新启动服务器。",
+    "profile_open": "请先关闭此服务器的连接页，再编辑配置。",
+    "profile_editing": "正在编辑此服务器，请先保存或取消编辑。",
+    "location_save": "桌面位置已改变，但打开位置保存失败，请重试。",
+    "move": "无法移动桌面，已保留原页面。"
   },
   "actions": {
     "cancel": "取消",
@@ -42,20 +53,31 @@
     "copy": "复制",
     "delete": "删除",
     "save": "保存",
-    "reload": "重新加载",
     "connect": "连接",
     "add_server": "添加服务器",
     "start": "启动",
     "edit": "编辑",
     "up": "上移",
-    "down": "下移"
+    "down": "下移",
+    "servers": "服务器列表",
+    "reconnect": "重新连接",
+    "retry": "重试",
+    "reload": "重新加载",
+    "resume": "恢复桌面",
+    "start_sidebar": "侧边栏启动",
+    "start_window": "独立窗口启动",
+    "resume_sidebar": "侧边栏恢复桌面",
+    "resume_window": "独立窗口恢复桌面"
   },
   "profiles": {
     "password_saved": "已保存，留空保留",
     "new": "新配置",
     "copy_name": "{{name}} 副本",
     "empty": "还没有服务器配置。",
-    "delete_confirm": "删除“{{name}}”的配置和保存的密码？已有连接不会中断。"
+    "delete_confirm": "删除“{{name}}”及其保存的密码？",
+    "password_available": "留空使用已保存的密码",
+    "edit": "编辑：{{name}}",
+    "removed": "配置已删除"
   },
   "fields": {
     "profiles": "服务器配置",
@@ -66,7 +88,8 @@
     "port": "端口",
     "username": "用户名",
     "domain": "域（可选）",
-    "password": "密码"
+    "password": "密码",
+    "run_in_background": "后台运行（关闭桌面后保持连接）"
   },
   "modes": {
     "sidebar": "侧边栏",

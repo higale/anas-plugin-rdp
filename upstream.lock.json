@@ -3,12 +3,6 @@
     "repository": "https://github.com/Devolutions/IronRDP.git",
     "revision": "2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d",
     "rustToolchain": "1.94.1",
-    "wasmPack": "0.15.0",
-    "wasmPackSha256": {
-      "x86_64-pc-windows-msvc": "518dc51180c7bc864699c9279b3bc99025bc109123e0249a34ba34d130a509bf",
-      "aarch64-apple-darwin": "0abff4a03d670b6c00ea31d0e1608a72407e355f3d3765e9c30eb45cd5b7e318",
-      "x86_64-apple-darwin": "d3f1a4a33e95f8f0d7801b024e08624c479999ac96aa150908b2394015cd0363"
-    },
     "nodeMajor": 24
   }
 }

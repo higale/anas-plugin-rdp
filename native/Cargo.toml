@@ -1,15 +1,18 @@
 [package]
-name = "anas-rdp-bridge"
+name = "anas-rdp-session"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [dependencies]
+ironrdp-client = { git = "https://github.com/Devolutions/IronRDP.git", rev = "2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d", features = ["rustls"] }
+ironrdp-tls = { git = "https://github.com/Devolutions/IronRDP.git", rev = "2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d", features = ["rustls"] }
+smallvec = "1.15"
+bytes = "1"
 anyhow = "1"
 futures-util = { version = "0.3", features = ["sink"] }
 ironrdp-core = { git = "https://github.com/Devolutions/IronRDP.git", rev = "2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d" }
 ironrdp-pdu = { git = "https://github.com/Devolutions/IronRDP.git", rev = "2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d", features = ["std"] }
-ironrdp-rdcleanpath = { git = "https://github.com/Devolutions/IronRDP.git", rev = "2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d" }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
 rustls-native-certs = "0.8"
 serde = { version = "1", features = ["derive"] }
@@ -22,3 +25,9 @@ tokio-tungstenite = "0.29"
 
 [dev-dependencies]
 rcgen = "0.14"
+
+[patch."https://github.com/Devolutions/IronRDP.git"]
+ironrdp-tls = { path = "vendor/ironrdp-tls" }
+
+[workspace]
+members = ["vendor/ironrdp-tls"]

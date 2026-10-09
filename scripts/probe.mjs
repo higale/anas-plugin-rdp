@@ -6,15 +6,15 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const { host, port = 3389 } = JSON.parse(readFileSync(resolve(root, '.local/rdp-test.json'), 'utf8'));
+const { host, port = 3389 } = JSON.parse(readFileSync(resolve(root, '.local/display-test.json'), 'utf8'));
 const targetKey = createHash('sha256').update(JSON.stringify([host, port])).digest('hex');
-const trustFile = resolve(root, '.local/rdp-trust.json');
+const trustFile = resolve(root, '.local/display-trust.json');
 let trustedSha256;
 if (existsSync(trustFile)) {
   const trust = JSON.parse(readFileSync(trustFile, 'utf8'));
   if (trust.target_key === targetKey) trustedSha256 = trust.certificate_sha256;
 }
-const binary = resolve(root, `native/target/debug/anas-rdp-bridge${process.platform === 'win32' ? '.exe' : ''}`);
+const binary = resolve(root, `native/target/debug/anas-rdp-session${process.platform === 'win32' ? '.exe' : ''}`);
 const child = spawn(binary, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 let output = '';
 child.stdout.setEncoding('utf8');

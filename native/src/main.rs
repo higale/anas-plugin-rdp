@@ -12,7 +12,8 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-mod bridge;
+mod listener;
+mod session;
 
 #[derive(Clone, Deserialize)]
 struct Target {
@@ -207,8 +208,8 @@ async fn main() -> anyhow::Result<()> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .map_err(|_| anyhow::anyhow!("TLS provider initialization failed"))?;
-    if std::env::args().nth(1).as_deref() == Some("--serve") {
-        return bridge::run().await;
+    if std::env::args().nth(1).as_deref() == Some("--session") {
+        return session::run().await;
     }
     // Input arrives through a private pipe, never process arguments or logs.
     let mut input = String::new();

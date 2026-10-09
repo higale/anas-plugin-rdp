@@ -44,13 +44,13 @@ for (const variant of ['web', 'native-win32-x64', 'native-darwin-arm64', 'native
     const manifest = JSON.parse(readFileSync(resolve(destination, 'PLUGIN.json'), 'utf8'));
     assert.equal(manifest.plugin_version, version);
     assert.ok(!existsSync(resolve(destination, 'native')));
-    // Public UI, backend JavaScript and WASM are built once.
+    // Public UI, backend JavaScript are built once.
     cpSync(destination, output, { recursive: true });
   } else {
     const target = `${build.platform}-${build.architecture}`;
     assert.deepEqual(readdirSync(destination).sort(), ['BUILD.json', 'native', 'third-party']);
     assert.deepEqual(readdirSync(resolve(destination, 'native')), [target]);
-    assert.deepEqual(readdirSync(resolve(destination, 'native', target)), [`anas-rdp-bridge${build.platform === 'win32' ? '.exe' : ''}`]);
+    assert.deepEqual(readdirSync(resolve(destination, 'native', target)), [`anas-rdp-session${build.platform === 'win32' ? '.exe' : ''}`]);
     cpSync(resolve(destination, 'native', target), resolve(output, 'native', target), { recursive: true });
   }
   const notices = resolve(destination, 'third-party/dependencies');

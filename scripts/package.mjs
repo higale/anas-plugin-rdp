@@ -17,7 +17,7 @@ if (!universal) {
 }
 const version = component === 'native' ? build.version : JSON.parse(readFileSync(resolve(source, 'PLUGIN.json'), 'utf8')).plugin_version;
 assert.match(version, /^\d+\.\d+\.\d+$/);
-let topLevel = ['PLUGIN.json', 'BUILD.json', 'USER_GUIDE.md', 'app.js', 'backend.cjs', 'index.html', 'style.css', 'ironrdp_web_bg.wasm', 'native', 'third-party', 'lang'];
+let topLevel = ['PLUGIN.json', 'BUILD.json', 'USER_GUIDE.md', 'app.js', 'backend.cjs', 'index.html', 'style.css', 'native', 'third-party', 'lang', 'assets'];
 if (component === 'web') topLevel = topLevel.filter(name => name !== 'native');
 if (component === 'native') topLevel = ['BUILD.json', 'native', 'third-party'];
 assert.deepEqual(readdirSync(source).sort(), topLevel.sort(), 'Unexpected package content');

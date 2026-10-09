@@ -24,16 +24,15 @@ if (component !== 'native') {
   const { build } = await import('esbuild');
   await build({ entryPoints: [resolve(root, 'src/backend.ts')], bundle: true, platform: 'node', format: 'cjs', target: 'node22', outfile: resolve(out, 'backend.cjs') });
   await build({ entryPoints: [resolve(root, 'src/ui/app.ts')], bundle: true, platform: 'browser', format: 'esm', target: 'es2022', outfile: resolve(out, 'app.js') });
-  // WASM resolves relative to the final bundled module.
-  cpSync(resolve(root, 'artifacts/upstream/iron-remote-desktop-rdp/ironrdp_web_bg.wasm'), resolve(out, 'ironrdp_web_bg.wasm'));
   for (const name of ['index.html', 'style.css']) cpSync(resolve(root, 'src/ui', name), resolve(out, name));
   cpSync(resolve(root, 'third-party'), resolve(out, 'third-party'), { recursive: true });
   cpSync(resolve(root, 'docs/USER_GUIDE.md'), resolve(out, 'USER_GUIDE.md'));
   cpSync(resolve(root, 'lang'), resolve(out, 'lang'), { recursive: true });
-  writeFileSync(resolve(out, 'PLUGIN.json'), JSON.stringify({ version: 0, id: 'rdp', name: 'Remote Desktop', lang: 'lang', home: { default_location: 'sidebar', locations: ['sidebar', 'window'] }, plugin_version: version, api_version: 1, platforms: component === 'web' ? ['win32', 'darwin'] : [process.platform], ui: 'index.html', backend: 'backend.cjs' }, null, 2) + '\n');
+  cpSync(resolve(root, 'assets'), resolve(out, 'assets'), { recursive: true });
+  writeFileSync(resolve(out, 'PLUGIN.json'), JSON.stringify({ version: 0, id: 'rdp', name: 'Remote Desktop', icon: 'assets/remote-desktop.svg', lang: 'lang', home: { default_location: 'sidebar', locations: ['sidebar', 'window'] }, plugin_version: version, api_version: 2, platforms: component === 'web' ? ['win32', 'darwin'] : [process.platform], ui: 'index.html', backend: 'backend.cjs' }, null, 2) + '\n');
 }
 if (component !== 'web') {
-  const binary = `anas-rdp-bridge${process.platform === 'win32' ? '.exe' : ''}`;
+  const binary = `anas-rdp-session${process.platform === 'win32' ? '.exe' : ''}`;
   mkdirSync(resolve(out, 'native', `${process.platform}-${process.arch}`), { recursive: true });
   cpSync(resolve(root, 'native/target', nativeTarget, 'release', binary), resolve(out, 'native', `${process.platform}-${process.arch}`, binary));
   if (process.platform === 'darwin') {
@@ -44,5 +43,5 @@ if (component !== 'web') {
 }
 cpSync(resolve(root, 'artifacts/licenses'), resolve(out, 'third-party/dependencies'), { recursive: true });
 const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
-writeFileSync(resolve(out, 'BUILD.json'), JSON.stringify({ version, component, plugin_commit: git('rev-parse', 'HEAD'), dirty: Boolean(git('status', '--porcelain')), platform: process.platform, architecture: process.arch, native_target: component === 'web' ? null : nativeTarget, node: process.version, rust: rustInfo.split(/\r?\n/)[0], host_dependency: { api_version: 1, capabilities: ['moveView', 'onViewChanged', 'setToolbar', 'onToolbarAction'] }, upstream: JSON.parse(readFileSync(resolve(root, 'upstream.lock.json'), 'utf8')), locks_sha256: Object.fromEntries(['package-lock.json', 'native/Cargo.lock'].map(name => [name, createHash('sha256').update(readFileSync(resolve(root, name))).digest('hex')])) }, null, 2) + '\n');
+writeFileSync(resolve(out, 'BUILD.json'), JSON.stringify({ version, component, plugin_commit: git('rev-parse', 'HEAD'), dirty: Boolean(git('status', '--porcelain')), platform: process.platform, architecture: process.arch, native_target: component === 'web' ? null : nativeTarget, node: process.version, rust: rustInfo.split(/\r?\n/)[0], host_dependency: { api_version: 2, capabilities: ['getContext', 'registerLifecycle', 'ready', 'moveView', 'onViewChanged', 'setToolbar', 'onToolbarAction'] }, upstream: JSON.parse(readFileSync(resolve(root, 'upstream.lock.json'), 'utf8')), locks_sha256: Object.fromEntries(['package-lock.json', 'native/Cargo.lock'].map(name => [name, createHash('sha256').update(readFileSync(resolve(root, name))).digest('hex')])) }, null, 2) + '\n');
 console.log(`Built ${component}: ${out}`);
