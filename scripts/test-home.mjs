@@ -8,7 +8,8 @@ const require = createRequire(join(host, 'package.json'));
 const { _electron: electron } = require('playwright');
 const { expect } = require('playwright/test');
 const { pluginPage, pluginByTitle, pluginWindow, windowCount } = require('./scripts/electron-plugin-helpers.cjs');
-const directory = await mkdtemp(resolve('.local/home-'));
+await mkdir(resolve('tmp'), { recursive: true });
+const directory = await mkdtemp(resolve('tmp/home-'));
 const data = join(directory, 'data'); await mkdir(data);
 const env = { ...process.env, ANAS_SKIP_SINGLE_INSTANCE_LOCK: '1' }; delete env.ELECTRON_RUN_AS_NODE;
 let application;
@@ -98,12 +99,15 @@ try {
   await frame.locator('#host').fill('test.invalid');
   await frame.locator('#username').fill('fixture');
   await frame.locator('#open-mode').selectOption('window');
+  await expect(frame.locator('#resolution')).toHaveValue('1280x800');
+  await frame.locator('#resolution').selectOption('1024x768');
   await frame.locator('#save').click();
   await expect(frame.locator('#profiles li')).toHaveCount(1);
   await frame.locator('#profiles li').hover();
   await expect(frame.locator('.row-actions')).toHaveCSS('opacity', '1');
   await frame.locator('[data-action="edit"]').click();
   await expect(frame.locator('#run-in-background')).toBeChecked();
+  await expect(frame.locator('#resolution')).toHaveValue('1024x768');
   await frame.locator('#run-in-background').uncheck();
   await expect(frame.locator('#copy, #reload')).toHaveCount(0);
   await expect(frame.locator('#reload-conflict')).toBeHidden();
@@ -174,6 +178,9 @@ try {
     await frame.locator('body').screenshot({ path: join(directory, `list-${theme}.png`) });
     await frame.locator('[data-action="edit"]').first().click();
     await expect(frame.locator('#profile-editor')).toBeVisible();
+    await frame.locator('#resolution').selectOption('custom');
+    await frame.locator('#desktop-width').fill('1440');
+    await frame.locator('#desktop-height').fill('960');
     await checkLayout(frame);
     await frame.locator('body').screenshot({ path: join(directory, `editor-${theme}.png`) });
     await frame.locator('#cancel-edit').click();
@@ -210,7 +217,7 @@ try {
   await frame.locator('.profile-select').last().dblclick();
   await expect.poll(() => windowCount(application)).toBe(3);
   let connection = await pluginByTitle(application, page, 'rdp', 'Synthetic server', 'window');
-  const connectionIcon = (await pluginWindow(application, connection)).locator('.panel-window-titlebar img');
+  const connectionIcon = (await pluginWindow(application, connection)).locator('.panel-window-titlebar > .plugin-icon img');
   await expect(connectionIcon).toHaveAttribute('src', /assets\/desktop.svg$/);
   await expect.poll(() => connectionIcon.evaluate(image => image.naturalWidth)).toBeGreaterThan(0);
   await expect(connection.locator('#connect')).toBeEnabled({ timeout: 20000 });
@@ -487,6 +494,6 @@ try {
     for (const socket of peers) socket.destroy();
     await new Promise(resolve => server.close(resolve));
   }
-  await writeFile('.local/home-result.json', JSON.stringify({ date: new Date().toISOString(), results, directory }, null, 2));
+  await writeFile('tmp/home-result.json', JSON.stringify({ date: new Date().toISOString(), results, directory }, null, 2));
   console.log(results.join('\n'));
 } finally { await application?.close(); }

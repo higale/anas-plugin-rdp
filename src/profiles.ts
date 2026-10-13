@@ -2,9 +2,10 @@ import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Profile, Target, Trust } from './profile-types';
+import { resolution } from './resolution';
 
 type Cipher = { version: number; iv: string; ciphertext: string; tag: string };
-type StoredProfile = Target & { id: string; revision: number; name: string; open_mode: Profile['openMode']; run_in_background: boolean; password?: Cipher };
+type StoredProfile = Target & { id: string; revision: number; name: string; open_mode: Profile['openMode']; run_in_background: boolean; clipboard_support: boolean; desktop_width: number; desktop_height: number; password?: Cipher };
 type State = { version: number; profiles: StoredProfile[]; certificate_trust: Trust[] };
 // Portable obfuscation by product choice, not a vault. Keep this versioned key
 // for existing backups. Anyone with this code and the file can decrypt it.
@@ -28,7 +29,7 @@ function mode(value: unknown): Profile['openMode'] {
   if (value !== undefined && value !== 'sidebar' && value !== 'window') return fail();
   return value ?? 'sidebar';
 }
-function background(value: unknown): boolean {
+function optionalFlag(value: unknown): boolean {
   if (value !== undefined && typeof value !== 'boolean') return fail();
   return value ?? false;
 }
@@ -54,8 +55,12 @@ function decrypt(profile: StoredProfile): string | null {
   } catch { return fail('PASSWORD_UNREADABLE'); }
 }
 function publicProfile(profile: StoredProfile): Profile {
-  const { password, open_mode, run_in_background, ...rest } = profile;
-  return { ...rest, openMode: open_mode, runInBackground: run_in_background, hasPassword: password !== undefined };
+  const { password, open_mode, run_in_background, clipboard_support, desktop_width, desktop_height, ...rest } = profile;
+  return { ...rest, desktopWidth: desktop_width, desktopHeight: desktop_height, openMode: open_mode, runInBackground: run_in_background, clipboardSupport: clipboard_support, hasPassword: password !== undefined };
+}
+function storedResolution(width: unknown, height: unknown) {
+  const { desktopWidth, desktopHeight } = resolution(width, height);
+  return { desktop_width: desktopWidth, desktop_height: desktopHeight };
 }
 function validTrust(value: unknown): value is Trust {
   if (!value || typeof value !== 'object') return false;
@@ -71,15 +76,15 @@ export class Profiles {
   private launches = new Map<string, { token: string; revision: number; expires: number }>();
   constructor(private readonly directory: string) {}
 
-  call(method: string, params: unknown): Promise<unknown> {
-    const next = this.queue.then(() => this.execute(method, object(params ?? {})));
+  call(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
+    const next = this.queue.then(() => { signal?.throwIfAborted(); return this.execute(method, object(params ?? {}), signal); });
     this.queue = next.catch(() => undefined);
     return next;
   }
 
   cancelLaunch(id: string) { this.launches.delete(id); }
 
-  private async read(): Promise<State> {
+  private async read(signal?: AbortSignal): Promise<State> {
     let raw: string;
     try { raw = await readFile(join(this.directory, 'profiles.json'), 'utf8'); }
     catch (error) {
@@ -96,9 +101,9 @@ export class Profiles {
       const state: State = { version: 0, profiles: [], certificate_trust: Array.isArray(values.certificate_trust) ? values.certificate_trust.filter(validTrust) : [] };
       if (values.connection) {
         const current = target(object(values.connection));
-        state.profiles.push({ ...current, id: randomUUID(), revision: 1, name: current.host, open_mode: 'sidebar', run_in_background: false });
+        state.profiles.push({ ...current, ...storedResolution(undefined, undefined), id: randomUUID(), revision: 1, name: current.host, open_mode: 'sidebar', run_in_background: false, clipboard_support: false });
       }
-      await this.write(state);
+      await this.write(state, signal);
       return state;
     }
     try {
@@ -114,7 +119,7 @@ export class Profiles {
         const name = string(row.name, 120).trim();
         if (!name) return fail();
         if (row.password !== undefined) object(row.password);
-        return { ...target(row), id, revision: Number(row.revision), name, open_mode: mode(row.open_mode), run_in_background: background(row.run_in_background), ...(row.password === undefined ? {} : { password: row.password as Cipher }) };
+        return { ...target(row), ...storedResolution(row.desktop_width, row.desktop_height), id, revision: Number(row.revision), name, open_mode: mode(row.open_mode), run_in_background: optionalFlag(row.run_in_background), clipboard_support: optionalFlag(row.clipboard_support), ...(row.password === undefined ? {} : { password: row.password as Cipher }) };
       });
       const trusts = state.certificate_trust ?? [];
       if (!Array.isArray(trusts) || !trusts.every(validTrust)) return fail();
@@ -122,19 +127,21 @@ export class Profiles {
     } catch { return fail('PROFILE_READ_FAILED'); }
   }
 
-  private async write(state: State) {
+  private async write(state: State, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const json = JSON.stringify(state, null, 2) + '\n';
     if (Buffer.byteLength(json) > 1024 * 1024) return fail('PROFILE_LIMIT');
     await mkdir(this.directory, { recursive: true });
     const temporary = join(this.directory, `profiles-${randomUUID()}.tmp`);
     try {
       await writeFile(temporary, json, { flag: 'wx', mode: 0o600 });
+      signal?.throwIfAborted();
       await rename(temporary, join(this.directory, 'profiles.json'));
-    } catch { return fail('PROFILE_WRITE_FAILED'); }
+    } catch { signal?.throwIfAborted(); return fail('PROFILE_WRITE_FAILED'); }
     finally { await unlink(temporary).catch(() => undefined); }
   }
 
-  private async execute(method: string, input: Record<string, unknown>) {
+  private async execute(method: string, input: Record<string, unknown>, signal?: AbortSignal) {
     for (const [key, request] of this.launches) if (request.expires <= Date.now()) this.launches.delete(key);
     if (method === 'profiles.consumeLaunch' || method === 'profiles.cancelLaunch') {
       const key = string(input.id, 80);
@@ -145,19 +152,19 @@ export class Profiles {
         return null;
       }
       this.launches.delete(key);
-      const state = await this.read();
+      const state = await this.read(signal);
       const profile = state.profiles.find(item => item.id === input.id);
       if (!profile) return fail('PROFILE_MISSING');
       if (profile.revision !== request.revision) return fail('PROFILE_CONFLICT');
       return publicProfile(profile);
     }
-    const state = await this.read();
+    const state = await this.read(signal);
     if (method === 'profiles.list') return state.profiles.map(publicProfile);
     if (method === 'trusts.list') return state.certificate_trust;
     if (method === 'trusts.save') {
       if (!validTrust(input)) return fail();
       state.certificate_trust = [...state.certificate_trust.filter(item => item.host !== input.host || item.port !== input.port), { host: input.host, port: input.port, sha256: input.sha256 }];
-      await this.write(state);
+      await this.write(state, signal);
       return state.certificate_trust;
     }
     const previous = input.id === undefined ? undefined : state.profiles.find(item => item.id === input.id);
@@ -167,7 +174,7 @@ export class Profiles {
       if (previous.open_mode === openMode) return publicProfile(previous);
       const next = { ...previous, open_mode: openMode, revision: previous.revision + 1 };
       state.profiles[state.profiles.indexOf(previous)] = next;
-      await this.write(state);
+      await this.write(state, signal);
       const launch = this.launches.get(previous.id);
       if (launch?.revision === previous.revision) launch.revision = next.revision;
       return publicProfile(next);
@@ -193,7 +200,7 @@ export class Profiles {
       if ((state.profiles[adjacent]?.id ?? null) !== input.neighborId) return fail('PROFILE_CONFLICT');
       if (adjacent >= 0 && adjacent < state.profiles.length) {
         [state.profiles[index], state.profiles[adjacent]] = [state.profiles[adjacent], previous];
-        await this.write(state);
+        await this.write(state, signal);
       }
       return state.profiles.map(publicProfile);
     }
@@ -205,13 +212,13 @@ export class Profiles {
       if (!previous) return fail('PROFILE_MISSING');
       const next = { ...previous, revision: previous.revision + 1, password: encrypt(previous.id, string(input.password, 4096)) };
       state.profiles[state.profiles.indexOf(previous)] = next;
-      await this.write(state);
+      await this.write(state, signal);
       return publicProfile(next);
     }
     if (method === 'profiles.delete') {
       if (!previous) return fail('PROFILE_MISSING');
       state.profiles = state.profiles.filter(item => item.id !== previous.id);
-      await this.write(state);
+      await this.write(state, signal);
       return null;
     }
     if (method !== 'profiles.save' && method !== 'profiles.copy') return fail();
@@ -227,19 +234,19 @@ export class Profiles {
     } else {
       const name = string(input.name, 120).trim();
       if (!name) return fail();
-      next = { ...target(input), id: previous?.id ?? randomUUID(), revision: (previous?.revision ?? 0) + 1, name, open_mode: mode(input.openMode), run_in_background: background(input.runInBackground) };
+      next = { ...target(input), ...storedResolution(input.desktopWidth, input.desktopHeight), id: previous?.id ?? randomUUID(), revision: (previous?.revision ?? 0) + 1, name, open_mode: mode(input.openMode), run_in_background: optionalFlag(input.runInBackground), clipboard_support: optionalFlag(input.clipboardSupport) };
       switch (input.passwordAction) {
         case 'keep': if (previous?.password) next.password = previous.password; break;
         case 'set': next.password = encrypt(next.id, string(input.password, 4096)); break;
         case 'remove': break;
         default: return fail();
       }
-      if (previous && ['host', 'port', 'username', 'domain', 'name', 'open_mode', 'run_in_background'].every(key => previous[key as keyof StoredProfile] === next[key as keyof StoredProfile])
+      if (previous && ['host', 'port', 'username', 'domain', 'name', 'open_mode', 'run_in_background', 'clipboard_support', 'desktop_width', 'desktop_height'].every(key => previous[key as keyof StoredProfile] === next[key as keyof StoredProfile])
         && JSON.stringify(previous.password) === JSON.stringify(next.password)) return publicProfile(previous);
     }
     if (previous && method === 'profiles.save') state.profiles[state.profiles.indexOf(previous)] = next;
     else state.profiles.push(next);
-    await this.write(state);
+    await this.write(state, signal);
     return publicProfile(next);
   }
 }

@@ -44,7 +44,14 @@
     "profile_open": "Close this server’s connection page before editing its profile.",
     "profile_editing": "Save or cancel this server’s edits before opening its connection page.",
     "location_save": "The desktop position changed, but its opening preference could not be saved. Try again.",
-    "move": "Could not move the desktop. Its original page is preserved."
+    "move": "Could not move the desktop. Its original page is preserved.",
+    "input_lock": "Could not change the local input lock. Try again.",
+    "keyboard_reset": "Could not reset the keyboard. Try again.",
+    "resolution": "Width and height must be integers from 200 to 8192, width must be even, and the total must not exceed 16,777,216 pixels.",
+    "window_size": "Could not fit the window to the desktop. You can resize the window manually.",
+    "clipboard": "Could not switch clipboard sync.",
+    "clipboard_busy": "A file transfer is in progress. Wait for it to finish before switching clipboard sync.",
+    "clipboard_sync": "Clipboard sync failed. Copy the content again to retry."
   },
   "actions": {
     "cancel": "Cancel",
@@ -67,7 +74,13 @@
     "start_sidebar": "Start in sidebar",
     "start_window": "Start in window",
     "resume_sidebar": "Resume in sidebar",
-    "resume_window": "Resume in window"
+    "resume_window": "Resume in window",
+    "lock_ui": "Lock local input",
+    "unlock_ui": "Local input locked — click to unlock",
+    "reset_keyboard": "Reset keyboard",
+    "fit_window": "Fit window to desktop",
+    "enable_clipboard": "Enable clipboard sync",
+    "disable_clipboard": "Disable clipboard sync"
   },
   "profiles": {
     "password_saved": "Saved; leave blank to keep",
@@ -89,7 +102,13 @@
     "username": "Username",
     "domain": "Domain (optional)",
     "password": "Password",
-    "run_in_background": "Run in background (keep connected after closing the desktop)"
+    "run_in_background": "Run in background (keep connected after closing the desktop)",
+    "clipboard_support": "Support clipboard",
+    "resolution": "Resolution",
+    "desktop_width": "Width (px)",
+    "desktop_height": "Height (px)",
+    "custom_resolution": "Custom",
+    "resolution_hint": "Applies when a new connection is established."
   },
   "modes": {
     "sidebar": "Sidebar",
@@ -98,5 +117,11 @@
   "certificate": {
     "accept": "Trust certificate and retry",
     "verify": "Verify the certificate SHA-256 for {{host}}:{{port}}. Trust applies only to this target; changes require confirmation."
+  },
+  "clipboard": {
+    "disabled": "Off",
+    "syncing": "Syncing",
+    "paused": "Waiting for activation",
+    "draining": "Finishing transfer"
   }
 }

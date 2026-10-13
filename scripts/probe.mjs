@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -27,6 +27,7 @@ try {
   if (code !== 0) throw new Error('Probe failed before producing a result.');
   const result = JSON.parse(output);
   result.target_key = targetKey;
-  writeFileSync(resolve(root, '.local/probe-result.json'), JSON.stringify(result, null, 2) + '\n');
-  console.log(`RDP probe: ${result.status}. Details saved to .local/probe-result.json.`);
+  mkdirSync(resolve(root, 'tmp'), { recursive: true });
+  writeFileSync(resolve(root, 'tmp/probe-result.json'), JSON.stringify(result, null, 2) + '\n');
+  console.log(`RDP probe: ${result.status}. Details saved to tmp/probe-result.json.`);
 } finally { clearTimeout(timer); }

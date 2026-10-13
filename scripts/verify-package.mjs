@@ -18,8 +18,8 @@ const entries = execFileSync(tar, ['-tf', archive], { encoding: 'utf8', maxBuffe
 // canonical entry names, even though tar accepts ./ and a root directory entry.
 for (const name of entries) assert.ok(!isAbsolute(name) && !name.includes('\\') && !name.replace(/\/$/, '').split('/').some(part => !part || part === '.' || part === '..'), 'Non-canonical or unsafe archive path');
 assert.deepEqual(entries.filter(name => name && !name.endsWith('/')).sort(), inventory.files.map(file => file.path).sort());
-mkdirSync(resolve(root, '.local'), { recursive: true });
-const extracted = mkdtempSync(resolve(root, '.local/package-check-'));
+mkdirSync(resolve(root, 'tmp'), { recursive: true });
+const extracted = mkdtempSync(resolve(root, 'tmp/package-check-'));
 if (process.platform === 'win32') {
   // Use an independent Windows extractor instead of validating tar with itself.
   execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$ErrorActionPreference = "Stop"; Expand-Archive -LiteralPath $env:RDP_VERIFY_ARCHIVE -DestinationPath $env:RDP_VERIFY_DIRECTORY'], {
@@ -52,6 +52,9 @@ if (variant === 'universal') {
 }
 assert.ok(manifest.platforms.includes(process.platform));
 assert.equal(manifest.plugin_version, version);
+for (const skill of manifest.skills ?? []) {
+  assert.ok(inventory.files.some(file => file.path === skill.path), `Missing declared skill: ${skill.id}`);
+}
 
 execFileSync(process.execPath, ['--test', 'test/backend.test.mjs'], { cwd: root, stdio: 'inherit', env: { ...process.env, RDP_TEST_PACKAGE: extracted } });
 console.log(`Verified ${inventory.files.length} archived files and native process lifecycle after extraction: ${extracted}`);

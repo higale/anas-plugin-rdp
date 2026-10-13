@@ -1,5 +1,13 @@
 {
   "asn1-rs-impl-0.2.0": "https://raw.githubusercontent.com/rusticata/asn1-rs/a20e5f7319c896737ad0f2557037817b91ad854f/",
+  "dispatch2-0.3.1": "https://raw.githubusercontent.com/madsmtm/objc2/8852b424193ca41602281b3d7540d7c8ed51e49a/",
+  "objc2-0.6.5": "https://raw.githubusercontent.com/madsmtm/objc2/d7d2fa23ceaa5e6096c923b081040e5d81b3b9df/",
+  "objc2-app-kit-0.3.2": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/",
+  "objc2-core-foundation-0.3.2": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/",
+  "objc2-core-graphics-0.3.2": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/",
+  "objc2-encode-4.1.0": "https://raw.githubusercontent.com/madsmtm/objc2/8d214f5477365ffcbcbb7de058c86ed9a518efb7/",
+  "objc2-foundation-0.3.2": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/",
+  "objc2-io-surface-0.3.2": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/",
   "rustcrypto-ff_derive-0.14.0-rc.0": "https://raw.githubusercontent.com/zkcrypto/ff/8417973539baabf561975144e0a68d166d0f9a95/",
   "winscard-0.3.3": "https://raw.githubusercontent.com/devolutions/sspi-rs/fb5ce085e48c337b03968349f5e2e85c83959754/"
 }

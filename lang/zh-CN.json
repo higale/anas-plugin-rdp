@@ -44,7 +44,14 @@
     "profile_open": "请先关闭此服务器的连接页，再编辑配置。",
     "profile_editing": "正在编辑此服务器，请先保存或取消编辑。",
     "location_save": "桌面位置已改变，但打开位置保存失败，请重试。",
-    "move": "无法移动桌面，已保留原页面。"
+    "move": "无法移动桌面，已保留原页面。",
+    "input_lock": "无法更改本地输入锁定状态，请重试。",
+    "keyboard_reset": "无法重置键盘，请重试。",
+    "resolution": "宽高须为 200～8192 的整数，宽度须为偶数，总像素不能超过 16,777,216。",
+    "window_size": "无法按桌面尺寸调整窗口，可手动调整窗口大小。",
+    "clipboard": "无法切换剪贴板同步。",
+    "clipboard_busy": "正在传输文件，完成后才能切换剪贴板。",
+    "clipboard_sync": "剪贴板同步失败，请重新复制后重试。"
   },
   "actions": {
     "cancel": "取消",
@@ -67,7 +74,13 @@
     "start_sidebar": "侧边栏启动",
     "start_window": "独立窗口启动",
     "resume_sidebar": "侧边栏恢复桌面",
-    "resume_window": "独立窗口恢复桌面"
+    "resume_window": "独立窗口恢复桌面",
+    "lock_ui": "锁定本地输入",
+    "unlock_ui": "本地输入已锁定，点击解锁",
+    "reset_keyboard": "重置键盘",
+    "fit_window": "适配桌面大小",
+    "enable_clipboard": "开启剪贴板同步",
+    "disable_clipboard": "关闭剪贴板同步"
   },
   "profiles": {
     "password_saved": "已保存，留空保留",
@@ -89,7 +102,13 @@
     "username": "用户名",
     "domain": "域（可选）",
     "password": "密码",
-    "run_in_background": "后台运行（关闭桌面后保持连接）"
+    "run_in_background": "后台运行（关闭桌面后保持连接）",
+    "clipboard_support": "支持剪贴板",
+    "resolution": "分辨率",
+    "desktop_width": "宽度（像素）",
+    "desktop_height": "高度（像素）",
+    "custom_resolution": "自定义",
+    "resolution_hint": "下次建立连接时生效。"
   },
   "modes": {
     "sidebar": "侧边栏",
@@ -98,5 +117,11 @@
   "certificate": {
     "accept": "信任此证书并重试",
     "verify": "请核对 {{host}}:{{port}} 的证书 SHA-256。信任仅适用于此目标，指纹变化将再次提示。"
+  },
+  "clipboard": {
+    "disabled": "已关闭",
+    "syncing": "同步中",
+    "paused": "待激活",
+    "draining": "传输收尾"
   }
 }

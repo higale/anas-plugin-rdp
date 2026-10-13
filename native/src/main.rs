@@ -12,7 +12,10 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+mod clipboard;
+mod input;
 mod listener;
+mod screenshot;
 mod session;
 
 #[derive(Clone, Deserialize)]

@@ -27,8 +27,8 @@
 
 公共组件与三个原生组件完成后，合并 job 验证源码提交、依赖锁、构建元数据及每个文件摘要一致性。以公共组件为基础加入三个原生程序，合并许可证；原生组件不携带重复 Web 资源。`PLUGIN.json` 声明 Windows/macOS，后台按 Node 运行时的操作系统和架构选择 helper。
 
-生成的 `anas-rdp-<version>-universal.zip` 再分别在 Windows、ARM Mac、Intel Mac 上解压，检查内容、原生权限／签名及 helper 启动回收。只有全部成功才发布。各平台远程认证、画面和输入仍需实机验证，不能用 CI 代替。
+生成的 `anas-rdp-<version>-universal.zip` 再分别在 Windows、ARM Mac、Intel Mac 上解压，检查内容、原生权限／签名及 helper 启动回收。只有全部成功才发布。远程认证、画面和输入的实机验证范围见[测试说明](TESTING.md)，不能用 CI 结果代替实测结论。
 
 Release 仅提供 `anas-rdp-<version>-universal.zip` 与一份 `SHA256SUMS.txt`；各组件 ZIP、独立摘要和逐文件清单只作为 Actions 内部验证产物保留 14 天。GitHub 自动生成的源码下载项不属于插件安装包。
 
-Actions 使用 GitHub 提供的 GITHUB_TOKEN；不上传真实 RDP 配置，不需要 RDP 密码或 Apple 证书。RDP 0.1.7 最低要求 Anas 3.3.8（插件 API 2）；配套发布时先同步宿主，再同步插件。后续发布须重新核对宿主最低版本，可选语种仅来自宿主语言包。插件和宿主分别同步和发布，发布插件不自动发布宿主。
+Actions 使用 GitHub 提供的 GITHUB_TOKEN；不上传真实 RDP 配置，不需要 RDP 密码或 Apple 证书。配套发布时先同步宿主，再同步插件；发布前须按实际使用的窗口适配、工具栏及其他接口核对宿主最低版本，并同步 README 与随包说明，可选语种仅来自宿主语言包。插件和宿主分别同步和发布，发布插件不自动发布宿主。

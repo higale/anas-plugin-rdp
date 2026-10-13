@@ -9,7 +9,8 @@ const { _electron: electron } = require('playwright');
 const { expect } = require('playwright/test');
 const { pluginPage, pluginWindow, windowCount } = require('./scripts/electron-plugin-helpers.cjs');
 const { ZipFile } = require('yazl');
-const directory = await mkdtemp(resolve('.local/languages-'));
+await mkdir(resolve('tmp'), { recursive: true });
+const directory = await mkdtemp(resolve('tmp/languages-'));
 const source = join(directory, 'source');
 await cp(resolve('dist'), source, { recursive: true });
 await writeFile(join(source, 'lang/fr.json'), JSON.stringify({ version: 0, _meta: { name: 'Français' }, plugin: { name: 'Bureau distant' }, actions: { new: 'Nouveau' } }));
@@ -68,7 +69,9 @@ try {
   await selectLanguage('Français (fr)', 'fr');
   await page.locator('[data-settings-tab="plugins"]').click();
   await expect(page.getByRole('button', { name: 'Bureau distant', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Open in side panel', exact: true }).click();
+  await page.getByRole('button', { name: 'Back to app', exact: true }).click();
+  await page.getByRole('button', { name: 'Plugins', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Bureau distant', exact: true }).click();
   let frame = await pluginPage(application, 'rdp');
   await expect(frame.locator('#new')).toBeEnabled({ timeout: 20000 });
   await expect(frame.locator('#new')).toHaveAttribute('aria-label', 'Nouveau');
@@ -121,6 +124,6 @@ try {
   assert.equal((await fallback.evaluate(() => window.anas.getInfo())).language, 'fr');
   results.push('Host French remains selectable after uninstall; a plugin without French falls back to English');
   results.push('Disable closes every view; reinstall uses only the new package language files');
-  await writeFile('.local/languages-result.json', JSON.stringify({ date: new Date().toISOString(), results, directory }, null, 2));
+  await writeFile('tmp/languages-result.json', JSON.stringify({ date: new Date().toISOString(), results, directory }, null, 2));
   console.log(results.join('\n'));
 } finally { await application?.close(); }

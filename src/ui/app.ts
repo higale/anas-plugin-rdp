@@ -1,9 +1,10 @@
 import { Desktop } from './desktop';
 import { closeContextMenu, openContextMenu } from './context-menu';
 import type { Profile, RuntimeState, Target, Trust } from '../profile-types';
+import { DEFAULT_DESKTOP_WIDTH, DEFAULT_DESKTOP_HEIGHT, resolution } from '../resolution';
 import { i18n, initializeLanguages, setLanguage, t } from './i18n';
 
-type Toolbar = { status?: { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' }; actions: { id: string; label: string; icon: 'x' | 'unplug' | 'list'; disabled: boolean }[] };
+type Toolbar = { status?: { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' }; actions: { id: string; label: string; icon: string; disabled: boolean; pressed?: boolean }[] };
 
 declare global {
   interface Window {
@@ -15,6 +16,7 @@ declare global {
       getInfo(): Promise<{ language: string; theme: string; fontSize: number; view: { instanceId: string; location: 'sidebar' | 'window' } }>;
       onViewChanged(listener: (view: { instanceId: string; location: 'sidebar' | 'window' }) => void): () => void;
       setToolbar(toolbar: Toolbar | null): Promise<void>;
+      resizeWindow(size: { width: number; height: number; restore?: boolean }): Promise<void>;
       onToolbarAction(listener: (id: string) => void | Promise<void>): () => void;
       getLanguageResources(): Promise<{ resources: Record<string, Record<string, unknown>>; errors: string[] }>;
       openHome(): Promise<void>;
@@ -50,6 +52,13 @@ let pendingTrust: Trust | undefined;
 let connecting = false;
 let connectionOperations = 0;
 let connected = false;
+let uiLocked = false;
+let uiLockPending = false;
+let keyboardResetPending = false;
+let clipboardEnabled = false;
+let clipboardState = 'paused';
+let clipboardPending = false;
+let clipboardErrorSeen = '';
 let disconnecting = false;
 let savingTrust = false;
 let profiles: Profile[] = [];
@@ -79,19 +88,51 @@ let releaseToolbarListener: (() => void) | undefined;
 let toolbarSnapshot = '';
 let toolbarRevision = 0;
 let toolbarReady = false;
-function connectionActions(): Toolbar['actions'] {
+let fittedDesktop: Desktop | undefined;
+let fittedSize = '';
+let fitScheduled = false;
+async function fitDesktopWindow(manual = false) {
+  const current = desktop, size = current?.size;
+  if (!current || !size || !connected || !ready || !toolbarReady || handoff || closing || location !== 'window' || fitScheduled) return;
+  const key = `${size.width}x${size.height}`;
+  if (!manual && current === fittedDesktop && key === fittedSize) return;
+  fitScheduled = true;
+  try {
+    if (manual && errorKey === 'errors.window_size') { errorKey = undefined; renderError(); }
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const context = await window.anas.getContext();
+    if (context.phase !== 'active' || context.location !== 'window' || current !== desktop || handoff || closing || !connected) return;
+    const size = current.size!, key = `${size.width}x${size.height}`;
+    if (!manual && current === fittedDesktop && key === fittedSize) return;
+    // Fit once per actual frame size, so later user resizing is respected.
+    fittedDesktop = current; fittedSize = key;
+    const bounds = element('desktop').getBoundingClientRect();
+    await window.anas.resizeWindow({ width: size.width + window.innerWidth - bounds.width,
+      height: size.height + window.innerHeight - bounds.height, ...(manual ? { restore: true } : {}) });
+  } catch {
+    if (current === desktop && !closing && !handoff) failure('errors.window_size');
+  } finally { fitScheduled = false; }
+}
+function connectionActions(windowActions = false): Toolbar['actions'] {
   return [
-    { id: 'profiles', label: t('actions.servers'), icon: 'list', disabled: !ready },
-    { id: 'disconnect', label: t(connecting ? 'actions.cancel' : 'actions.disconnect'), icon: connecting ? 'x' : 'unplug', disabled: !connecting && !session },
+    { id: 'profiles', label: t('actions.servers'), icon: 'assets/list.svg', disabled: !ready },
+    { id: 'ui-lock', label: t(uiLocked ? 'actions.unlock_ui' : 'actions.lock_ui'), icon: uiLocked ? 'assets/lock.svg' : 'assets/lock-open.svg', pressed: uiLocked, disabled: !connected || uiLockPending || handoff || !ready },
+    ...(connectionProfile?.clipboardSupport ? [{ id: 'clipboard', label: clipboardEnabled ? `${t('actions.disable_clipboard')} · ${t('clipboard.' + clipboardState)}` : t('actions.enable_clipboard'), icon: 'assets/clipboard.svg', pressed: clipboardEnabled, disabled: !connected || clipboardPending || handoff || !ready }] : []),
+    { id: 'reset-keyboard', label: t('actions.reset_keyboard'), icon: 'assets/refresh-cw.svg', disabled: !connected || keyboardResetPending || handoff || !ready },
+    ...(windowActions && location === 'window' ? [{ id: 'fit-window', label: t('actions.fit_window'), icon: 'assets/scan.svg',
+      disabled: !connected || !desktop?.size || handoff || !ready }] : []),
+    { id: 'disconnect', label: t(connecting ? 'actions.cancel' : 'actions.disconnect'), icon: connecting ? 'assets/x.svg' : 'assets/unplug.svg', disabled: !connecting && !session },
   ];
 }
 function presentation() {
+  document.body.dataset.location = location;
   element('connection-header').hidden = instanceId !== 'main' && location === 'window' && toolbarReady;
   element('connection-name').hidden = !element('connection-header').hidden;
+  if (toolbarReady) fitDesktopWindow();
   if (!releaseToolbarListener || closing) return;
   const toolbar: Toolbar | null = instanceId === 'main' ? null : {
     status: { label: t(statusKey), tone: connected ? 'success' : connecting || disconnecting ? 'warning' : 'neutral' },
-    actions: connectionActions(),
+    actions: connectionActions(true),
   };
   const snapshot = JSON.stringify(toolbar);
   if (snapshot === toolbarSnapshot) return;
@@ -136,6 +177,7 @@ function profileFailure(error: unknown) {
   else if (code.includes('PROFILE_CONFLICT')) failure('errors.conflict');
   else if (code.includes('PROFILE_MISSING')) failure('errors.missing');
   else if (code.includes('PASSWORD_UNREADABLE')) failure('errors.password');
+  else if (code.includes('RDP_INVALID_RESOLUTION')) failure('errors.resolution');
   else if (code.includes('PROFILE_READ_FAILED')) failure('errors.read');
   else failure('errors.profile');
 }
@@ -143,6 +185,9 @@ function controls() {
   element('connection').toggleAttribute('inert', !ready);
   element('profile-editor').toggleAttribute('inert', !ready);
   const busy = connecting || connected || disconnecting || savingTrust || editing || !ready;
+  if (!connected) uiLocked = false;
+  if (!connected) clipboardEnabled = false;
+  element('clipboard').hidden = !connectionProfile?.clipboardSupport;
   const manager = instanceId === 'main';
   element('manager').hidden = !manager || editorOpen;
   element('manager').toggleAttribute('inert', !ready);
@@ -164,12 +209,13 @@ function controls() {
   for (const action of connectionActions()) {
     const button = element<HTMLButtonElement>(action.id === 'profiles' ? 'manage-profiles' : action.id);
     button.disabled = action.disabled;
+    if (action.pressed !== undefined) button.setAttribute('aria-pressed', String(action.pressed));
     button.title = action.label;
     button.setAttribute('aria-label', action.label);
-    for (const icon of Array.from(button.querySelectorAll<SVGElement>('[data-icon]'))) icon.toggleAttribute('hidden', icon.dataset.icon !== action.icon);
+    button.querySelector<HTMLElement>('.action-icon')!.style.maskImage = `url(${JSON.stringify(action.icon)})`;
   }
   input('accept-certificate').disabled = connecting || connected || savingTrust;
-  for (const id of ['host', 'port', 'username', 'domain', 'password', 'name', 'open-mode', 'remember-password', 'run-in-background', 'new', 'add-server', 'delete', 'save', 'up', 'down', 'cancel-edit', 'confirm-delete', 'cancel-delete', 'retry-profiles', 'reload-conflict']) input(id).disabled = busy;
+  for (const id of [...fieldIds, 'new', 'add-server', 'delete', 'save', 'up', 'down', 'cancel-edit', 'confirm-delete', 'cancel-delete', 'retry-profiles', 'reload-conflict']) input(id).disabled = busy;
   for (const row of Array.from(element('profiles').querySelectorAll<HTMLElement>('li'))) {
     const saved = profiles.some(profile => profile.id === row.dataset.id);
     for (const button of Array.from(row.querySelectorAll<HTMLButtonElement>('button'))) {
@@ -178,7 +224,10 @@ function controls() {
     }
   }
   const locked = editorOpen && profileLocked(selected?.id);
-  for (const id of ['host', 'port', 'username', 'domain', 'password', 'name', 'open-mode', 'remember-password', 'run-in-background', 'save']) input(id).disabled ||= locked;
+  for (const id of [...fieldIds, 'save']) input(id).disabled ||= locked;
+  const customResolution = input('resolution').value === 'custom';
+  element('custom-resolution').hidden = !customResolution;
+  for (const id of ['desktop-width', 'desktop-height']) input(id).disabled ||= !customResolution;
   element('edit-locked').hidden = !locked;
   element('edit-locked').textContent = t(!sessionsKnown ? 'errors.sessions' : openProfileIds.includes(selected?.id ?? '') ? 'errors.profile_open' : 'errors.active');
   input('delete').disabled ||= !selected || profileWorking(selected?.id);
@@ -204,6 +253,11 @@ function selectProfile(profile?: Profile) {
   input('password').value = '';
   input('remember-password').checked = profile?.hasPassword ?? false;
   input('run-in-background').checked = profile?.runInBackground ?? false;
+  input('clipboard-support').checked = profile?.clipboardSupport ?? false;
+  input('desktop-width').value = String(profile?.desktopWidth ?? DEFAULT_DESKTOP_WIDTH);
+  input('desktop-height').value = String(profile?.desktopHeight ?? DEFAULT_DESKTOP_HEIGHT);
+  const size = `${input('desktop-width').value}x${input('desktop-height').value}`;
+  input('resolution').value = Array.from(element<HTMLSelectElement>('resolution').options).some(option => option.value === size) ? size : 'custom';
   element('error').hidden = true;
   errorKey = undefined;
   element('retry-profiles').hidden = true;
@@ -229,6 +283,11 @@ async function refreshSessions() {
       const nextOrphans = next.filter(session => !profiles.some(profile => profile.id === session.profile.id)).map(session => session.id).join();
       if (JSON.stringify(next) !== JSON.stringify(runningSessions) || runtime.openProfiles.join() !== openProfileIds.join() || runtime.editingProfiles.join() !== editingProfiles.join()) closeContextMenu();
       runningSessions = next; openProfileIds = runtime.openProfiles; editingProfiles = runtime.editingProfiles; sessionsKnown = true;
+      const clipboardError = next.find(item => item.id === session?.id);
+      if (clipboardError?.clipboardErrors) {
+        const key = `${clipboardError.id}:${clipboardError.clipboardErrors}`;
+        if (key !== clipboardErrorSeen) { clipboardErrorSeen = key; failure('errors.clipboard_sync'); }
+      }
       if (oldOrphans !== nextOrphans) renderProfiles();
       await applyProfileSelection(runtime.selection);
     } catch {
@@ -409,10 +468,12 @@ async function startProfile(id: string, resumeOnly = false, openLocation?: 'side
   });
 }
 async function saveProfile() {
+  const size = resolution(Number(input('desktop-width').value), Number(input('desktop-height').value));
   const next = await window.anas.backend.call('profiles.save', {
-    ...target(), id: selected?.id, revision: selected?.revision,
+    ...target(), ...size, id: selected?.id, revision: selected?.revision,
     name: input('name').value.trim() || input('host').value.trim(), openMode: input('open-mode').value,
     runInBackground: input('run-in-background').checked,
+    clipboardSupport: input('clipboard-support').checked,
     passwordAction: !input('remember-password').checked ? 'remove' : selected?.hasPassword && !passwordEdited ? 'keep' : 'set',
     ...(input('remember-password').checked && (passwordEdited || !selected?.hasPassword) ? { password: input('password').value } : {}),
   }) as Profile;
@@ -428,6 +489,40 @@ async function edit(action: () => Promise<void>) {
   finally { editing = false; controls(); }
 }
 function target(): Target { return { host: input('host').value.trim(), port: Number(input('port').value), username: input('username').value, domain: input('domain').value }; }
+async function toggleUiLock() {
+  const current = session, currentDesktop = desktop;
+  if (!current || !currentDesktop || !connected || uiLockPending || handoff || !ready) return;
+  uiLockPending = true; controls();
+  try {
+    const result = await window.anas.backend.call('setUiLocked', { owner, id: current.id, locked: !uiLocked }) as { ui_locked: boolean; uiRevision: number };
+    if (closing || session !== current || desktop !== currentDesktop) return;
+    currentDesktop.updateInputLock(result.ui_locked, result.uiRevision);
+    if (errorKey === 'errors.input_lock') { errorKey = undefined; renderError(); }
+  } catch { if (session === current && !closing) failure('errors.input_lock'); }
+  finally { uiLockPending = false; if (!closing) controls(); }
+}
+async function toggleClipboard() {
+  const current = session;
+  if (!current || !connected || clipboardPending || handoff || !ready) return;
+  clipboardPending = true; controls();
+  try {
+    const currentDesktop = desktop;
+    const result = await window.anas.backend.call('setClipboardEnabled', { owner, id: current.id, enabled: !clipboardEnabled }) as { enabled: boolean; revision: number };
+    if (session === current && desktop === currentDesktop && !closing) currentDesktop?.updateClipboard(result.enabled, result.revision);
+    if (session === current && !closing && ['errors.clipboard', 'errors.clipboard_busy'].includes(errorKey ?? '')) { errorKey = undefined; renderError(); }
+  } catch (error) { if (session === current && !closing) failure(String(error).includes('RDP_CLIPBOARD_BUSY') ? 'errors.clipboard_busy' : 'errors.clipboard'); }
+  finally { clipboardPending = false; if (!closing) controls(); }
+}
+async function resetKeyboard() {
+  const current = session;
+  if (!current || !connected || keyboardResetPending || handoff || !ready) return;
+  keyboardResetPending = true; controls();
+  try {
+    await window.anas.backend.call('resetKeyboard', { owner, id: current.id });
+    if (session === current && !closing && errorKey === 'errors.keyboard_reset') { errorKey = undefined; renderError(); }
+  } catch { if (session === current && !closing) failure('errors.keyboard_reset'); }
+  finally { keyboardResetPending = false; if (!closing) controls(); }
+}
 async function disconnect() {
   if (disconnecting) return;
   disconnecting = true;
@@ -456,8 +551,9 @@ async function disconnect() {
 async function attach(connection: SessionRef, signal?: AbortSignal) {
   signal?.throwIfAborted();
   desktop?.dispose();
-  const mine = new Desktop(element('desktop'), { ...connection, pageId: pageContext.pageId }, state => {
+  const mine = new Desktop(element('desktop'), { ...connection, pageId: pageContext.pageId }, (state, locked) => {
     if (closing || session !== connection) return;
+    uiLocked = locked;
     if (state === 'connected') { connected = true; status('status.connected'); }
     else if (state === 'connecting') status('status.authenticating');
     else if (state === 'closed' || state.startsWith('RDP_') || state === 'connection_failed') {
@@ -467,7 +563,7 @@ async function attach(connection: SessionRef, signal?: AbortSignal) {
       void refreshDisconnectedSession().catch(() => {});
     }
     controls();
-  });
+  }, presentation, (enabled, state) => { clipboardEnabled = enabled; if (state) clipboardState = state; controls(); });
   desktop = mine;
   mine.canvas.setAttribute('aria-label', t('plugin.name'));
   const cancel = () => { if (desktop === mine) desktop = undefined; mine.dispose(); };
@@ -570,7 +666,7 @@ async function connect() {
       if (generation !== mine) return;
       prepared = true;
       const trustedSha256 = trusts.find(item => item.host === profile.host && item.port === profile.port)?.sha256;
-      const created = await window.anas.backend.call('create', { owner, name: profile.name, openMode: profile.openMode, runInBackground: profile.runInBackground, host: profile.host, port: profile.port, username: profile.username, domain: profile.domain, password, trustedSha256 }) as SessionRef;
+      const created = await window.anas.backend.call('create', { owner, name: profile.name, openMode: profile.openMode, runInBackground: profile.runInBackground, clipboardSupport: profile.clipboardSupport, desktopWidth: profile.desktopWidth, desktopHeight: profile.desktopHeight, host: profile.host, port: profile.port, username: profile.username, domain: profile.domain, password, trustedSha256 }) as SessionRef;
       if (generation !== mine) {
         if (!closing || !profile.runInBackground) await window.anas.backend.call('disconnect', { owner, id: created.id });
         return;
@@ -621,6 +717,14 @@ async function openProfiles() {
 element('manage-profiles').addEventListener('click', () => void openProfiles());
 element('password').addEventListener('input', () => { passwordEdited = true; });
 element('remember-password').addEventListener('change', () => controls());
+element('resolution').addEventListener('change', () => {
+  if (input('resolution').value !== 'custom') {
+    const [width, height] = input('resolution').value.split('x');
+    input('desktop-width').value = width;
+    input('desktop-height').value = height;
+  }
+  controls();
+});
 function newProfile() { closeContextMenu(); returnId = selected?.id; editorOpen = true; selectProfile(); input('name').focus(); }
 element('new').addEventListener('click', newProfile);
 element('add-server').addEventListener('click', newProfile);
@@ -685,6 +789,9 @@ async function moveProfile(id: string, direction: -1 | 1) {
 for (const [id, direction] of [['up', -1], ['down', 1]] as const) element(id).addEventListener('click', () => {
   if (selected) void moveProfile(selected.id, direction);
 });
+element('clipboard').addEventListener('click', () => void toggleClipboard());
+element('ui-lock').addEventListener('click', () => void toggleUiLock());
+element('reset-keyboard').addEventListener('click', () => void resetKeyboard());
 element('disconnect').addEventListener('click', () => void disconnect());
 element('accept-certificate').addEventListener('click', async () => {
   const current = connectionProfile;
@@ -763,13 +870,13 @@ function disposePage() {
 }
 window.addEventListener('pagehide', disposePage);
 async function idle(signal: AbortSignal) {
-  while (connectionOperations || connecting || disconnecting || savingTrust || editing || checkingLaunch || refreshingInfo || sessionRefresh || locationSave) {
+  while (uiLockPending || keyboardResetPending || clipboardPending || connectionOperations || connecting || disconnecting || savingTrust || editing || checkingLaunch || refreshingInfo || sessionRefresh || locationSave) {
     signal.throwIfAborted();
     await new Promise(resolve => setTimeout(resolve, 20));
   }
   signal.throwIfAborted();
 }
-const fieldIds = ['host', 'port', 'username', 'domain', 'password', 'name', 'open-mode', 'remember-password', 'run-in-background'];
+const fieldIds = ['host', 'port', 'username', 'domain', 'password', 'name', 'open-mode', 'remember-password', 'run-in-background', 'clipboard-support', 'resolution', 'desktop-width', 'desktop-height'];
 window.anas.registerLifecycle({
   async prepare({ signal }) {
     closeContextMenu();
@@ -795,12 +902,12 @@ window.anas.registerLifecycle({
       catch (error) { if (await refreshSession(signal)) throw error; }
     }
     signal.throwIfAborted();
-    handoff = false;
+    handoff = false; controls();
   },
   async resume({ signal }) {
     await restoreInput(signal);
     signal.throwIfAborted();
-    handoff = false;
+    handoff = false; controls();
   },
   async dispose({ signal, reason }) {
     handoff = true;
@@ -823,10 +930,12 @@ function translateTrust() {
   if (pendingTrust) element('trust-message').textContent = t('certificate.verify', { host: pendingTrust.host, port: pendingTrust.port });
 }
 function translate() {
-  const labels: Record<string, string> = { name: 'name', 'open-mode': 'open_mode', 'run-in-background': 'run_in_background', 'remember-password': 'remember_password', 'session-remember-password': 'remember_password', host: 'host', port: 'port', username: 'username', domain: 'domain', password: 'password' };
+  const labels: Record<string, string> = { name: 'name', 'open-mode': 'open_mode', 'run-in-background': 'run_in_background', 'clipboard-support': 'clipboard_support', 'remember-password': 'remember_password', 'session-remember-password': 'remember_password', host: 'host', port: 'port', username: 'username', domain: 'domain', password: 'password', resolution: 'resolution', 'desktop-width': 'desktop_width', 'desktop-height': 'desktop_height' };
   for (const [id, key] of Object.entries(labels)) document.querySelector('[data-label="' + id + '"]')!.textContent = t('fields.' + key);
   const buttons = { 'add-server': 'actions.add_server', 'cancel-edit': 'actions.cancel', 'confirm-delete': 'actions.delete', 'cancel-delete': 'actions.cancel', 'retry-profiles': 'actions.retry', 'reload-conflict': 'actions.reload', save: 'actions.save', 'mode-sidebar': 'modes.sidebar', 'mode-window': 'modes.window', 'accept-certificate': 'certificate.accept' };
   for (const [id, key] of Object.entries(buttons)) element(id).textContent = t(key);
+  element('resolution-custom').textContent = t('fields.custom_resolution');
+  element('resolution-hint').textContent = t('fields.resolution_hint');
   for (const [id, key] of Object.entries({ new: 'actions.new', delete: 'actions.delete', up: 'actions.up', down: 'actions.down' })) {
     element(id).title = t(key); element(id).setAttribute('aria-label', t(key));
   }
@@ -882,6 +991,10 @@ try {
   if (instanceId !== 'main') await window.anas.backend.call('connection.open', { owner });
   element('language-warning').hidden = languages.errors.length === 0;
   releaseToolbarListener = window.anas.onToolbarAction(async id => {
+    if (id === 'fit-window') { await fitDesktopWindow(true); return; }
+    if (id === 'clipboard') { await toggleClipboard(); return; }
+    if (id === 'ui-lock') { await toggleUiLock(); return; }
+    if (id === 'reset-keyboard') { await resetKeyboard(); return; }
     if (id === 'profiles') { await openProfiles(); return; }
     if (id !== 'disconnect' || (!connecting && !session)) return;
     await disconnect();

@@ -1,6 +1,6 @@
 {
   "name": "anas-plugin-rdp",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,12 +12,16 @@
     "build": "node scripts/build.mjs",
     "package": "node scripts/package.mjs",
     "verify:package": "node scripts/verify-package.mjs",
+    "test:clipboard": "node scripts/test-clipboard.mjs",
     "test:live": "node scripts/test-native-session.mjs",
     "test": "node --test test/backend.test.mjs test/profiles.test.mjs",
-    "test:ui": "node --test test/ui.test.mjs",
+    "test:ui": "node --test test/ui.test.mjs test/desktop.test.mjs",
     "test:host": "node scripts/test-host.mjs",
     "test:languages": "node scripts/test-languages.mjs",
-    "test:home": "node scripts/test-home.mjs"
+    "test:home": "node scripts/test-home.mjs",
+    "test:session-tools": "node scripts/test-session-tools.mjs",
+    "test:clipboard-focus": "node scripts/test-clipboard-focus.mjs",
+    "test:unicode": "node scripts/test-unicode-input.mjs"
   },
   "devDependencies": {
     "@types/node": "24.10.0",

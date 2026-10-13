@@ -13,8 +13,10 @@ const compiled = await build({
   plugins: [{ name: 'synthetic-rdp', setup(builder) {
     builder.onResolve({ filter: /^\.\/desktop$/ }, () => ({ path: 'rdp', namespace: 'fixture' }));
     builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: `export class Desktop {
-      constructor(container, connection, onState) { window.__remoteState = state => { if (state !== 'connected') this.available = false; onState(state); }; this.canvas = document.createElement('canvas'); container.append(this.canvas);
-        this.ready = Promise.resolve().then(() => window.__attachDisplay()).then(() => { this.available = true; onState('connected'); }); }
+      constructor(container, connection, onState, onSize, onClipboard) { window.__remoteClipboard = onClipboard; this.onClipboard = onClipboard; window.__remoteSize = (width, height) => { this.size = { width, height }; this.canvas.width = width; this.canvas.height = height; onSize(); }; window.__remoteState = state => { if (state !== 'connected') this.available = false; onState(state, false); }; this.onState = onState; this.lockRevision = 0; this.locked = false; window.__remoteLock = (locked, revision = ++window.__lockRevision) => this.updateInputLock(locked, revision); this.canvas = document.createElement('canvas'); container.append(this.canvas);
+        this.ready = Promise.resolve().then(() => window.__attachDisplay()).then(() => { this.available = true; this.updateInputLock(window.__initialLock, window.__lockRevision); if (!window.__delayFirstFrame) window.__remoteSize(1024, 768); }); }
+      updateClipboard(enabled) { this.onClipboard(enabled); }
+      updateInputLock(locked, revision) { if (revision >= this.lockRevision) { this.lockRevision = revision; this.locked = locked; } this.onState('connected', this.locked); }
       release() {}
       dispose() { this.available = false; this.canvas.remove(); }
     }` }));
@@ -38,7 +40,7 @@ async function until(predicate) {
   }
 }
 async function fixture(t, options = {}) {
-  const dom = new JSDOM(html, { url: 'https://rdp.invalid/', runScripts: 'outside-only' });
+  const dom = new JSDOM(html, { url: 'https://rdp.invalid/', runScripts: 'outside-only', pretendToBeVisual: true });
   t.after(() => dom.window.close());
   const { window } = dom;
   const calls = [];
@@ -46,6 +48,7 @@ async function fixture(t, options = {}) {
   window.HTMLElement.prototype.scrollIntoView = function(options) { calls.push({ method: 'scrollIntoView', params: { id: this.dataset.id, ...options } }); };
   const errors = [];
   const element = id => window.document.getElementById(id);
+  element('desktop').getBoundingClientRect = () => ({ width: 1000, height: 744 });
   const button = element('accept-certificate');
   const addListener = button.addEventListener.bind(button);
   button.addEventListener = (type, listener, settings) => addListener(type, event => {
@@ -69,6 +72,7 @@ async function fixture(t, options = {}) {
     failed: async () => { calls.push({ method: 'failed' }); },
     onViewChanged: listener => { viewListener = listener; return () => { viewListener = undefined; }; },
     setToolbar: async value => { await options.toolbar?.(value); toolbar = value; },
+    resizeWindow: async params => { calls.push({ method: 'resizeWindow', params }); await options.resize?.(); },
     onToolbarAction: listener => { toolbarListener = listener; return () => { toolbarListener = undefined; }; },
     getInfo: async () => info,
     getLanguageResources: async () => ({ resources: { ...languageResources, ...options.languages }, errors: [] }),
@@ -117,10 +121,16 @@ async function fixture(t, options = {}) {
       if (method === 'lease') return options.lease?.() ?? { owner: null, epoch: 0 };
       if (method === 'claim') { await options.claim?.(); return { owner: params.pageId, epoch: params.expectedEpoch + 1 }; }
       if (method === 'create') { await options.create?.(); return { id: String(++nextId), token: 'synthetic', url: 'ws://127.0.0.1:9/display' }; }
+      if (method === 'resetKeyboard') { await options.resetKeyboard?.(params); return { session_id: params.id, accepted: true, toggle_flags: 0 }; }
+      if (method === 'setUiLocked') { await options.lock?.(params); const uiRevision = ++window.__lockRevision; if (!options.delayLockSnapshot) window.__remoteLock(params.locked, uiRevision); return { session_id: params.id, ui_locked: params.locked, uiRevision }; }
+      if (method === 'setClipboardEnabled') { if (options.clipboardError) throw new Error(options.clipboardError); window.__remoteClipboard(params.enabled); return { enabled: params.enabled }; }
       if (method === 'status') return options.status?.(params) ?? { state: 'connected', certificate: null };
       return null;
     } },
   };
+  window.__lockRevision = 0;
+  window.__initialLock = options.initialLock ?? false;
+  window.__delayFirstFrame = options.delayFirstFrame ?? false;
   window.__attachDisplay = async () => {
     attempts++;
     if (options.connect) return options.connect(attempts);
@@ -130,6 +140,61 @@ async function fixture(t, options = {}) {
   element('username').value = 'fixture';
   return { window, info, element, calls, errors, lifecycle: () => lifecycle, context, toolbar: () => toolbar, action: id => toolbarListener?.(id), hasToolbarListener: () => !!toolbarListener, move: location => { info.view.location = location; context.location = location; if (context.phase === 'active') viewLocations.set(profile.id, location); viewListener?.(info.view); }, hasViewListener: () => !!viewListener, submit: () => element(options.manager ? 'profile-editor' : 'connection').dispatchEvent(new window.Event('submit', { cancelable: true })) };
 }
+
+test('the resolution selector saves presets and preserves custom drafts across page handoff', async t => {
+  const ui = await fixture(t, { manager: true });
+  ui.element('profiles').querySelector('[data-action=edit]').click();
+  await until(() => !ui.element('profile-editor').hidden);
+  assert.equal(ui.element('resolution').value, '1280x800');
+  assert.equal(ui.element('custom-resolution').hidden, true);
+  ui.element('resolution').value = '1024x768';
+  ui.element('resolution').dispatchEvent(new ui.window.Event('change'));
+  ui.submit();
+  await until(() => !ui.element('manager').hidden);
+  const saved = ui.calls.find(call => call.method === 'profiles.save').params;
+  assert.equal(saved.desktopWidth, 1024); assert.equal(saved.desktopHeight, 768);
+  ui.element('profiles').querySelector('[data-action=edit]').click();
+  await until(() => !ui.element('profile-editor').hidden);
+  assert.equal(ui.element('resolution').value, '1024x768');
+  ui.element('resolution').value = 'custom';
+  ui.element('resolution').dispatchEvent(new ui.window.Event('change'));
+  assert.equal(ui.element('custom-resolution').hidden, false);
+  ui.element('desktop-width').value = '1440'; ui.element('desktop-height').value = '960';
+  const restore = await ui.lifecycle().prepare({ signal: new ui.window.AbortController().signal, context: ui.context });
+  const moved = await fixture(t, { manager: true, restore });
+  assert.equal(moved.element('resolution').value, 'custom');
+  assert.equal(moved.element('custom-resolution').hidden, false);
+  assert.equal(moved.element('desktop-width').value, '1440');
+  assert.equal(moved.element('desktop-height').value, '960');
+  moved.submit();
+  await until(() => !moved.element('manager').hidden);
+  assert.equal(moved.calls.find(call => call.method === 'profiles.save').params.desktopWidth, 1440);
+  assert.equal(moved.calls.find(call => call.method === 'profiles.save').params.desktopHeight, 960);
+});
+
+test('invalid custom resolution keeps the draft and shows a translated error without saving', async t => {
+  const ui = await fixture(t, { manager: true, profile: { desktopWidth: 1440, desktopHeight: 960 } });
+  ui.element('profiles').querySelector('[data-action=edit]').click();
+  await until(() => !ui.element('profile-editor').hidden);
+  assert.equal(ui.element('resolution').value, 'custom');
+  ui.element('desktop-width').value = '8192'; ui.element('desktop-height').value = '8192';
+  ui.submit();
+  await until(() => !ui.element('error').hidden);
+  assert.match(ui.element('error').textContent, /16,777,216/);
+  assert.equal(ui.calls.some(call => call.method === 'profiles.save'), false);
+  assert.equal(ui.element('desktop-width').value, '8192');
+  ui.element('desktop-height').value = '2048';
+  ui.submit();
+  await until(() => !ui.element('manager').hidden);
+});
+
+test('new connections receive the saved fixed resolution', async t => {
+  const ui = await fixture(t, { profile: { desktopWidth: 1024, desktopHeight: 768 } });
+  ui.submit();
+  await until(() => ui.element('status').textContent === 'Connected');
+  const config = ui.calls.find(call => call.method === 'create').params;
+  assert.equal(config.desktopWidth, 1024); assert.equal(config.desktopHeight, 768);
+});
 
 test('a delayed failed connection cannot disconnect a newer session or display its certificate', async t => {
   const oldStatus = deferred();
@@ -466,7 +531,7 @@ test('titlebar cancel prevents a delayed handshake from restoring a canceled ses
   ui.submit();
   await until(() => ui.calls.some(call => call.method === 'create'));
   assert.equal(ui.toolbar().actions.find(action => action.id === 'disconnect').label, 'Cancel');
-  assert.equal(ui.toolbar().actions.find(action => action.id === 'disconnect').icon, 'x');
+  assert.equal(ui.toolbar().actions.find(action => action.id === 'disconnect').icon, 'assets/x.svg');
   await ui.action('disconnect');
   handshake.resolve({ run: () => new Promise(() => {}) });
   await until(() => ui.toolbar().status.label === 'Disconnected');
@@ -1314,8 +1379,8 @@ test('connection actions have matching accessible labels in the sidebar and host
   const ui = await fixture(t, { create: () => pending.promise });
   const button = ui.element('manage-profiles');
   assert.equal(button.getAttribute('aria-label'), 'Server list');
-  assert.equal(ui.toolbar().actions.find(action => action.id === 'profiles').icon, 'list');
-  assert.equal(button.querySelector('[data-icon="list"]').hasAttribute('hidden'), false);
+  assert.equal(ui.toolbar().actions.find(action => action.id === 'profiles').icon, 'assets/list.svg');
+  assert.match(button.querySelector('.action-icon').style.maskImage, /assets\/list\.svg/);
   button.click();
   await until(() => ui.calls.some(call => call.method === 'profiles.select'));
   assert.equal(ui.calls.find(call => call.method === 'profiles.select').params.id, 'fixture');
@@ -1325,13 +1390,12 @@ test('connection actions have matching accessible labels in the sidebar and host
   assert.equal(stop.disabled, true);
   ui.submit();
   await until(() => stop.title === 'Cancel');
-  assert.equal(stop.querySelector('[data-icon="x"]').hasAttribute('hidden'), false);
-  assert.equal(stop.querySelector('[data-icon="unplug"]').hasAttribute('hidden'), true);
-  assert.equal(ui.toolbar().actions.find(action => action.id === 'disconnect').icon, 'x');
+  assert.match(stop.querySelector('.action-icon').style.maskImage, /assets\/x\.svg/);
+  assert.equal(ui.toolbar().actions.find(action => action.id === 'disconnect').icon, 'assets/x.svg');
   pending.resolve();
   await until(() => ui.element('status').textContent === 'Connected');
   assert.equal(stop.title, 'Disconnect');
-  assert.equal(stop.querySelector('[data-icon="unplug"]').hasAttribute('hidden'), false);
+  assert.match(stop.querySelector('.action-icon').style.maskImage, /assets\/unplug\.svg/);
 });
 
 test('opening the list selects and scrolls to the requested server without saving or connecting', async t => {
@@ -1368,4 +1432,205 @@ test('a navigation request waits for editing to finish instead of overwriting an
   ui.window.dispatchEvent(new ui.window.Event('focus'));
   await until(() => !navigation.request);
   assert.equal(ui.element('profiles').querySelector('[aria-pressed="true"]').closest('li').dataset.id, second.id);
+});
+
+test('local input lock uses the same state and action in sidebar and window, follows tools, and remains manually reversible', async t => {
+  const ui = await fixture(t);
+  await until(() => !ui.element('connect').disabled);
+  ui.submit();
+  await until(() => !ui.element('ui-lock').disabled);
+  assert.equal(ui.element('ui-lock').getAttribute('aria-pressed'), 'false');
+  ui.element('ui-lock').click();
+  await until(() => ui.toolbar()?.actions.find(a => a.id === 'ui-lock').pressed === true);
+  assert.equal(ui.element('ui-lock').getAttribute('aria-pressed'), 'true');
+  assert.equal(ui.element('disconnect').disabled, false);
+  assert.equal(ui.calls.filter(c => c.method === 'setUiLocked').at(-1).params.locked, true);
+  ui.move('window');
+  await until(() => ui.element('connection-header').hidden);
+  assert.equal(ui.toolbar().actions.find(a => a.id === 'ui-lock').icon, 'assets/lock.svg');
+  await ui.action('ui-lock');
+  await until(() => ui.toolbar().actions.find(a => a.id === 'ui-lock').pressed === false);
+  ui.window.__remoteLock(true);
+  await until(() => ui.toolbar().actions.find(a => a.id === 'ui-lock').pressed === true);
+  ui.move('sidebar');
+  assert.equal(ui.element('ui-lock').getAttribute('aria-pressed'), 'true');
+  await ui.action('disconnect');
+  await until(() => ui.element('ui-lock').disabled);
+  assert.equal(ui.element('ui-lock').getAttribute('aria-pressed'), 'false');
+});
+
+test('a failed lock request preserves the current state and permits retry', async t => {
+  let fail = true;
+  const ui = await fixture(t, { lock: async () => { if (fail) throw new Error('RDP_CONTROL_TIMEOUT'); } });
+  await until(() => !ui.element('connect').disabled); ui.submit();
+  await until(() => !ui.element('ui-lock').disabled);
+  await ui.action('ui-lock');
+  assert.equal(ui.element('ui-lock').getAttribute('aria-pressed'), 'false');
+  assert.equal(ui.element('ui-lock').disabled, false);
+  assert.match(ui.element('error-message').textContent, /local input lock/);
+  fail = false;
+  await ui.action('ui-lock');
+  assert.equal(ui.element('ui-lock').getAttribute('aria-pressed'), 'true');
+});
+
+test('completed lock changes can be immediately reversed while display snapshots are delayed', async t => {
+  const ui = await fixture(t, { delayLockSnapshot: true });
+  await until(() => !ui.element('connect').disabled); ui.submit();
+  await until(() => !ui.element('ui-lock').disabled);
+  await ui.action('ui-lock');
+  assert.equal(ui.element('ui-lock').getAttribute('aria-pressed'), 'true');
+  await ui.action('ui-lock');
+  assert.equal(ui.element('ui-lock').getAttribute('aria-pressed'), 'false');
+  ui.window.__remoteLock(true, 1);
+  assert.equal(ui.element('ui-lock').getAttribute('aria-pressed'), 'false');
+  assert.deepEqual(ui.calls.filter(call => call.method === 'setUiLocked').map(call => call.params.locked), [true, false]);
+});
+
+test('reset keyboard is explicit, shared by sidebar/window, and available while UI input is locked', async t => {
+  const ui = await fixture(t, { initialLock: true });
+  await until(() => !ui.element('connect').disabled); ui.submit();
+  await until(() => !ui.element('reset-keyboard').disabled);
+  assert.equal(ui.calls.filter(c => c.method === 'resetKeyboard').length, 0);
+  assert.equal(ui.element('reset-keyboard').getAttribute('aria-label'), 'Reset keyboard');
+  ui.element('reset-keyboard').click();
+  await until(() => ui.calls.some(c => c.method === 'resetKeyboard') && !ui.element('reset-keyboard').disabled);
+  assert.equal(ui.element('ui-lock').getAttribute('aria-pressed'), 'true');
+  const original = ui.calls.find(c => c.method === 'resetKeyboard').params;
+  ui.move('window');
+  await until(() => ui.element('connection-header').hidden);
+  assert.equal(ui.calls.filter(c => c.method === 'resetKeyboard').length, 1);
+  assert.equal(ui.toolbar().actions.find(a => a.id === 'reset-keyboard').icon, 'assets/refresh-cw.svg');
+  await ui.action('reset-keyboard');
+  assert.deepEqual(ui.calls.filter(c => c.method === 'resetKeyboard').at(-1).params, original);
+  await ui.action('disconnect');
+  await until(() => ui.element('reset-keyboard').disabled);
+  assert.equal(ui.calls.filter(c => c.method === 'resetKeyboard').length, 2);
+});
+
+test('reset keyboard prevents duplicate clicks, reports failures and permits an explicit retry', async t => {
+  let fail = true, finish;
+  const pending = new Promise(resolve => { finish = resolve; });
+  const ui = await fixture(t, { resetKeyboard: async () => { if (fail) { await pending; throw new Error('RDP_INPUT_UNAVAILABLE'); } } });
+  await until(() => !ui.element('connect').disabled); ui.submit();
+  await until(() => !ui.element('reset-keyboard').disabled);
+  ui.element('reset-keyboard').click();
+  await until(() => ui.element('reset-keyboard').disabled);
+  await ui.action('reset-keyboard');
+  assert.equal(ui.calls.filter(c => c.method === 'resetKeyboard').length, 1);
+  const signal = new ui.window.AbortController().signal;
+  let prepared = false;
+  const preparing = ui.lifecycle().prepare({ signal }).then(state => { prepared = true; return state; });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(prepared, false, 'Handoff must wait for a pending reset receipt.');
+  finish();
+  assert.equal((await preparing).errorKey, 'errors.keyboard_reset');
+  await ui.lifecycle().resume({ signal });
+  await until(() => !ui.element('reset-keyboard').disabled);
+  assert.match(ui.element('error-message').textContent, /reset the keyboard/i);
+  fail = false;
+  await ui.action('reset-keyboard');
+  assert.equal(ui.element('error').hidden, true);
+  assert.equal(ui.calls.filter(c => c.method === 'resetKeyboard').length, 2);
+});
+
+
+test('a connected window fits the actual frame once, while sidebar and handoff never resize it', async t => {
+  const ui = await fixture(t, { location: 'window', profile: { desktopWidth: 1920, desktopHeight: 1080 } });
+  ui.element('session-password').value = 'fixture'; ui.submit();
+  await until(() => ui.calls.some(call => call.method === 'resizeWindow'));
+  const sizes = () => ui.calls.filter(call => call.method === 'resizeWindow');
+  assert.deepEqual({ ...sizes()[0].params }, { width: 1048, height: 792 });
+  ui.window.__remoteSize(1024, 768);
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(sizes().length, 1, 'Repeated frames must not override manual resizing');
+  await ui.lifecycle().prepare({ signal: new ui.window.AbortController().signal });
+  ui.window.__remoteSize(1280, 800);
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(sizes().length, 1, 'A source handing off cannot resize');
+  await ui.lifecycle().resume({ signal: new ui.window.AbortController().signal });
+  await until(() => sizes().length === 2);
+  assert.deepEqual({ ...sizes()[1].params }, { width: 1304, height: 824 });
+  const sidebar = await fixture(t);
+  sidebar.element('session-password').value = 'fixture'; sidebar.submit();
+  await until(() => sidebar.window.document.body.dataset.connected === 'true');
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(sidebar.calls.some(call => call.method === 'resizeWindow'), false);
+});
+
+test('failed window fitting reports the error without disconnecting the desktop', async t => {
+  const ui = await fixture(t, { location: 'window', resize: () => { throw new Error('Resize failed'); } });
+  ui.element('session-password').value = 'fixture'; ui.submit();
+  await until(() => ui.element('error-message').textContent.includes('fit the window'));
+  assert.equal(ui.window.document.body.dataset.connected, 'true');
+  assert.equal(ui.calls.some(call => call.method === 'disconnect'), false);
+});
+
+test('the window fit button can refit the same desktop and retry a failed automatic fit without reconnecting', async t => {
+  let fail = true;
+  const ui = await fixture(t, { location: 'window', resize: () => { if (fail) throw new Error('Resize failed'); } });
+  ui.element('session-password').value = 'fixture'; ui.submit();
+  await until(() => ui.element('error-message').textContent.includes('fit the window'));
+  const action = ui.toolbar().actions.find(action => action.id === 'fit-window');
+  assert.equal(action.label, 'Fit window to desktop');
+  assert.equal(action.disabled, false);
+  assert.equal(ui.toolbar().actions.length, 5);
+  fail = false;
+  await ui.action('fit-window');
+  await ui.action('fit-window');
+  assert.equal(ui.element('error').hidden, true);
+  const sizes = ui.calls.filter(call => call.method === 'resizeWindow');
+  assert.equal(sizes.length, 3);
+  assert.equal(sizes[0].params.restore, undefined);
+  assert.equal(sizes[1].params.restore, true);
+  assert.equal(sizes[2].params.restore, true);
+  assert.equal(ui.calls.some(call => call.method === 'disconnect'), false);
+  ui.move('sidebar');
+  await until(() => !ui.toolbar().actions.some(action => action.id === 'fit-window'));
+  await ui.action('fit-window');
+  assert.equal(ui.calls.filter(call => call.method === 'resizeWindow').length, 3);
+});
+
+test('the first frame enables window fitting without waiting for another connection update', async t => {
+  const ui = await fixture(t, { location: 'window', delayFirstFrame: true });
+  ui.element('session-password').value = 'fixture'; ui.submit();
+  await until(() => ui.element('status').textContent === 'Connected' && !ui.toolbar().actions.find(action => action.id === 'ui-lock').disabled);
+  assert.equal(ui.toolbar().actions.find(action => action.id === 'fit-window').disabled, true);
+  assert.equal(ui.calls.some(call => call.method === 'resizeWindow'), false);
+  ui.window.__remoteSize(1024, 768);
+  await until(() => ui.calls.some(call => call.method === 'resizeWindow'));
+  assert.equal(ui.toolbar().actions.find(action => action.id === 'fit-window').disabled, false);
+});
+
+
+test('clipboard support is opt-in and the shared toggle follows the connection snapshot', async t => {
+  const unsupported = await fixture(t);
+  const supportLabel = () => unsupported.window.document.querySelector('[data-label="clipboard-support"]').textContent;
+  assert.equal(supportLabel(), 'Support clipboard');
+  unsupported.info.language = 'zh-CN';
+  unsupported.window.dispatchEvent(new unsupported.window.Event('focus'));
+  await until(() => supportLabel() === '支持剪贴板');
+  assert.equal(unsupported.element('clipboard').hidden, true);
+  assert.equal(unsupported.toolbar().actions.some(a => a.id === 'clipboard'), false);
+  const ui = await fixture(t, { profile: { clipboardSupport: true } });
+  ui.submit(); await until(() => ui.window.document.body.dataset.connected === 'true');
+  assert.equal(ui.calls.find(c => c.method === 'create').params.clipboardSupport, true);
+  assert.equal(ui.element('clipboard').hidden, false);
+  assert.equal(ui.element('clipboard').getAttribute('aria-pressed'), 'false');
+  await ui.action('clipboard');
+  assert.equal(ui.element('clipboard').getAttribute('aria-pressed'), 'true');
+  assert.equal(ui.toolbar().actions.find(a => a.id === 'clipboard').pressed, true);
+  for (const [state, label] of [['syncing', 'Syncing'], ['paused', 'Waiting for activation'], ['draining', 'Finishing transfer']]) {
+    ui.window.__remoteClipboard(true, state);
+    await until(() => ui.toolbar().actions.find(a => a.id === 'clipboard').label.includes(label));
+    assert.equal(ui.toolbar().actions.find(a => a.id === 'clipboard').pressed, true);
+  }
+  ui.window.__remoteClipboard(false);
+  assert.equal(ui.element('clipboard').getAttribute('aria-pressed'), 'false');
+});
+test('clipboard busy leaves its toggle unchanged and reports the transfer', async t => {
+  const ui = await fixture(t, { profile: { clipboardSupport: true }, clipboardError: 'RDP_CLIPBOARD_BUSY' });
+  ui.submit(); await until(() => ui.window.document.body.dataset.connected === 'true');
+  await ui.action('clipboard');
+  assert.equal(ui.element('clipboard').getAttribute('aria-pressed'), 'false');
+  assert.match(ui.element('error-message').textContent, /file transfer/);
 });

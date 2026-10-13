@@ -13,6 +13,53 @@ async function fixture(t) {
   t.after(() => rm(directory, { recursive: true, force: true }));
   return { directory, store: new Profiles(directory), read: async () => JSON.parse(await readFile(join(directory, 'profiles.json'), 'utf8')) };
 }
+test('fixed resolution persists, copies and survives password or location updates', async t => {
+  const { store, directory, read } = await fixture(t);
+  let profile = await store.call('profiles.save', { ...fields, desktopWidth: 1024, desktopHeight: 768 });
+  assert.equal((await read()).version, 0);
+  assert.equal((await read()).profiles[0].desktop_width, 1024);
+  assert.equal((await read()).profiles[0].desktop_height, 768);
+  assert.equal((await store.call('profiles.save', { ...profile, passwordAction: 'keep' })).revision, profile.revision);
+  profile = await store.call('profiles.save', { ...profile, desktopWidth: 1440, desktopHeight: 960, passwordAction: 'keep' });
+  assert.equal(profile.revision, 2);
+  profile = await store.call('profiles.savePassword', { ...profile, password: 'synthetic' });
+  profile = await store.call('profiles.setOpenMode', { id: profile.id, openMode: 'window' });
+  const copy = await store.call('profiles.copy', { ...profile, name: 'Copy' });
+  for (const row of await new Profiles(directory).call('profiles.list', {})) {
+    assert.equal(row.desktopWidth, 1440); assert.equal(row.desktopHeight, 960);
+  }
+  assert.equal(await store.call('profiles.password', copy), 'synthetic');
+});
+
+test('v0 profiles without optional resolution fields read defaults without rewriting data', async t => {
+  const { store, directory, read } = await fixture(t);
+  const profile = await store.call('profiles.save', fields);
+  assert.equal(profile.desktopWidth, 1280); assert.equal(profile.desktopHeight, 800);
+  const state = await read();
+  delete state.profiles[0].desktop_width; delete state.profiles[0].desktop_height;
+  const raw = JSON.stringify(state);
+  await writeFile(join(directory, 'profiles.json'), raw);
+  assert.deepEqual(await new Profiles(directory).call('profiles.list', {}), [profile]);
+  assert.equal(await readFile(join(directory, 'profiles.json'), 'utf8'), raw);
+  state.profiles[0].desktop_width = 1920;
+  await writeFile(join(directory, 'profiles.json'), JSON.stringify(state));
+  const [partial] = await store.call('profiles.list', {});
+  assert.equal(partial.desktopWidth, 1920); assert.equal(partial.desktopHeight, 800);
+});
+
+test('invalid resolution writes preserve the profile, while valid boundary sizes work', async t => {
+  const { store } = await fixture(t);
+  const original = await store.call('profiles.save', fields);
+  for (const [desktopWidth, desktopHeight] of [[0,800],[1280,0],[199,800],[1281,800],[8194,800],[1280,8193],[1024.5,768],[1024,768.5],[8192,8192],[null,800],['1920',1080]]) {
+    await assert.rejects(store.call('profiles.save', { ...original, desktopWidth, desktopHeight, passwordAction: 'keep' }), /RDP_INVALID_RESOLUTION/);
+  }
+  assert.deepEqual(await store.call('profiles.list', {}), [original]);
+  for (const [desktopWidth, desktopHeight] of [[200,200],[8192,2048],[3840,2160]]) {
+    const saved = await store.call('profiles.save', { ...fields, desktopWidth, desktopHeight });
+    assert.equal(saved.desktopWidth, desktopWidth); assert.equal(saved.desktopHeight, desktopHeight);
+  }
+});
+
 test('passwords are encrypted, portable, randomized, and explicitly removable', async t => {
   const { store, directory, read } = await fixture(t);
   const password = 'synthetic-password-这是测试';
@@ -256,4 +303,21 @@ test('background running is optional, defaults off and preserves explicit choice
   assert.equal(disabled.runInBackground, false);
   assert.equal(await store.call('profiles.password', disabled), 'synthetic');
   assert.equal((await read()).profiles[0].run_in_background, false);
+});
+
+
+test('clipboard support defaults off without migration and survives copy and partial updates', async t => {
+  const { store, directory, read } = await fixture(t);
+  let profile = await store.call('profiles.save', fields);
+  assert.equal(profile.clipboardSupport, false);
+  const old = await read(); delete old.profiles[0].clipboard_support;
+  await writeFile(join(directory, 'profiles.json'), JSON.stringify(old));
+  assert.equal((await store.call('profiles.get', profile)).clipboardSupport, false);
+  assert.equal((await read()).profiles[0].clipboard_support, undefined);
+  profile = await store.call('profiles.save', { ...profile, clipboardSupport: true, passwordAction: 'keep' });
+  assert.equal((await read()).profiles[0].clipboard_support, true);
+  const moved = await store.call('profiles.setOpenMode', { id: profile.id, openMode: 'window' });
+  const copy = await store.call('profiles.copy', { ...moved, name: 'Clipboard copy' });
+  assert.equal(copy.clipboardSupport, true);
+  for (const invalid of [null, 0, 'true']) await assert.rejects(store.call('profiles.save', { ...moved, clipboardSupport: invalid, passwordAction: 'keep' }), /PROFILE_INVALID/);
 });

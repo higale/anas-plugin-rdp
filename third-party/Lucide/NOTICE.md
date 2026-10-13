@@ -1,6 +1,6 @@
 # Lucide 图标
 
-连接栏的 List、Unplug、X 使用 Lucide 1.33.0 的 SVG 路径，与 Anas 宿主的图标保持一致。
+`assets/` 中的 List、Unplug、X、Lock、LockOpen、RefreshCw、Scan、Clipboard 使用 Lucide 1.33.0 的 SVG 路径。侧栏与独立窗口工具栏共用这些包内文件。
 
 来源：https://github.com/lucide-icons/lucide
 

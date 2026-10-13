@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const { version } = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
-mkdirSync(resolve(root, '.local'), { recursive: true });
-const stage = mkdtempSync(resolve(root, '.local/universal-'));
+mkdirSync(resolve(root, 'tmp'), { recursive: true });
+const stage = mkdtempSync(resolve(root, 'tmp/universal-'));
 const output = resolve(stage, 'package');
 mkdirSync(output);
 const hash = data => createHash('sha256').update(data).digest('hex');

@@ -1,5 +1,7 @@
-# Local test hosts, credentials, logs and screenshots
+# Persistent local test configuration and reference material
 /.local/
+# Disposable files; safe to delete after related tasks stop
+/tmp/
 .env
 .env.*
 !.env.example

@@ -4,7 +4,7 @@ use anyhow::{Context, bail};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use ironrdp_client::{
-    config::{ConfigBuilder, Destination},
+    config::{ClipboardType, ConfigBuilder, Destination},
     output_channel::output_channel,
     rdp::{RdpClient, RdpInputEvent, RdpInputSender, RdpOutputEvent},
 };
@@ -19,10 +19,10 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::io::{BufRead, Read, Write};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 use tokio::time::{Instant, timeout};
 use tokio_tungstenite::{
     accept_hdr_async_with_config,
@@ -44,8 +44,31 @@ struct Configuration {
     password: String,
     #[serde(default)]
     domain: String,
+    #[serde(default = "default_desktop_width")]
+    desktop_width: u16,
+    #[serde(default = "default_desktop_height")]
+    desktop_height: u16,
+    #[serde(default)]
+    clipboard_support: bool,
     token: String,
     origin: String,
+}
+fn default_desktop_width() -> u16 {
+    1280
+}
+fn default_desktop_height() -> u16 {
+    800
+}
+
+fn validate_resolution(width: u16, height: u16) -> anyhow::Result<()> {
+    if !(200..=8192).contains(&width)
+        || !(200..=8192).contains(&height)
+        || !width.is_multiple_of(2)
+        || usize::from(width) * usize::from(height) > MAX_PIXELS
+    {
+        bail!("RDP_INVALID_RESOLUTION");
+    }
+    Ok(())
 }
 #[derive(Clone)]
 struct Snapshot {
@@ -55,41 +78,112 @@ struct Snapshot {
     cursor: Value,
     owner: Option<String>,
     epoch: u64,
+    ui_locked: bool,
+    clipboard_enabled: bool,
+    clipboard_state: String,
+    ui_revision: u64,
+    frame_revision: u64,
+    frame_time: u64,
+    cursor_revision: u64,
+    cursor_time: u64,
+    position: Option<(u16, u16)>,
+    input_revision: u64,
+    input_time: u64,
 }
+#[derive(Default)]
 struct Controls {
     owner: Option<String>,
     epoch: u64,
+    ui_locked: bool,
+    ui_revision: u64,
     keys: HashSet<(u8, bool)>,
     buttons: HashSet<u16>,
     attached: HashSet<String>,
     ready: HashSet<String>,
+    position: (u16, u16),
+    release_wakeup: Arc<Notify>,
 }
 impl Controls {
-    fn release(&mut self, input: &RdpInputSender) -> anyhow::Result<()> {
-        for (code, extended) in self.keys.clone() {
-            let flags = KeyboardFlags::RELEASE
-                | if extended {
-                    KeyboardFlags::EXTENDED
-                } else {
-                    KeyboardFlags::empty()
-                };
-            send(input, FastPathInputEvent::KeyboardEvent(flags, code))?;
-            self.keys.remove(&(code, extended));
-        }
-        for button in self.buttons.clone() {
-            send(
-                input,
-                FastPathInputEvent::MouseEvent(MousePdu {
-                    flags: PointerFlags::from_bits_retain(button),
-                    x_position: 0,
-                    y_position: 0,
-                    number_of_wheel_rotation_units: 0,
+    fn releases(&self) -> super::input::Events {
+        self.keys
+            .iter()
+            .map(|&(code, extended)| super::input::key(code, extended, false))
+            .chain(
+                self.buttons.iter().map(|&button| {
+                    super::input::mouse(self.position.0, self.position.1, button, 0)
                 }),
-            )?;
-            self.buttons.remove(&button);
+            )
+            .collect()
+    }
+    fn release(&mut self, input: &RdpInputSender) -> anyhow::Result<()> {
+        let events = self.releases();
+        if !events.is_empty() {
+            input
+                .try_send(RdpInputEvent::FastPath(events))
+                .map_err(|_| anyhow::anyhow!("RDP_INPUT_UNAVAILABLE"))?;
+        }
+        self.keys.clear();
+        self.buttons.clear();
+        Ok(())
+    }
+    fn reset_keyboard(&mut self, input: &RdpInputSender) -> anyhow::Result<()> {
+        use ironrdp_pdu::input::fast_path::SynchronizeFlags;
+        send(
+            input,
+            FastPathInputEvent::SyncEvent(SynchronizeFlags::empty()),
+        )?;
+        // Explicit reset only. Ordinary tool input never records or clears held keys.
+        self.keys.clear();
+        Ok(())
+    }
+    fn release_detached(&mut self, input: &RdpInputSender) -> anyhow::Result<()> {
+        if self.owner.is_none() {
+            self.release(input)?;
         }
         Ok(())
     }
+    fn accepts_ui(&self, revision: Option<u64>) -> bool {
+        !self.ui_locked && revision == Some(self.ui_revision)
+    }
+    fn set_ui_locked(&mut self, locked: bool, input: &RdpInputSender) -> anyhow::Result<()> {
+        if self.ui_locked != locked {
+            self.release(input)?;
+            self.ui_locked = locked;
+            self.ui_revision += 1;
+        }
+        Ok(())
+    }
+    fn set_owner(&mut self, next: Option<String>) {
+        if self.owner != next {
+            self.owner = next;
+            self.epoch += 1;
+        }
+    }
+}
+// Retry only local UI releases after presentation disappears. The connection
+// keeps running and tools never acquire a held-key database through this path.
+async fn release_detached_inputs(controls: Arc<Mutex<Controls>>, input: RdpInputSender) {
+    let wakeup = controls.lock().expect("controls").release_wakeup.clone();
+    loop {
+        wakeup.notified().await;
+        loop {
+            if controls
+                .lock()
+                .expect("controls")
+                .release_detached(&input)
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+}
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 fn emit(value: Value) {
     let mut out = std::io::stdout().lock();
@@ -99,7 +193,7 @@ fn emit(value: Value) {
 fn send(input: &RdpInputSender, event: FastPathInputEvent) -> anyhow::Result<()> {
     input
         .try_send(RdpInputEvent::FastPath(smallvec::smallvec![event]))
-        .map_err(|_| anyhow::anyhow!("input unavailable"))
+        .map_err(|_| anyhow::anyhow!("RDP_INPUT_UNAVAILABLE"))
 }
 fn valid_page(value: &str) -> bool {
     !value.is_empty()
@@ -137,6 +231,7 @@ pub async fn run() -> anyhow::Result<()> {
     let config: Configuration =
         serde_json::from_str(&line).context("invalid session configuration")?;
     super::validate_target(&config.target)?;
+    validate_resolution(config.desktop_width, config.desktop_height)?;
     if config.token.len() != 64
         || !config.token.bytes().all(|c| c.is_ascii_hexdigit())
         || config.origin.is_empty()
@@ -160,8 +255,13 @@ pub async fn run() -> anyhow::Result<()> {
         .with_username(config.username)
         .with_password(config.password)
         .with_domain(config.domain)
-        .with_desktop_width(1280)
-        .with_desktop_height(800)
+        .with_desktop_width(config.desktop_width)
+        .with_desktop_height(config.desktop_height)
+        .with_clipboard(if config.clipboard_support {
+            ClipboardType::Enable
+        } else {
+            ClipboardType::Disable
+        })
         .with_tls(true)
         .with_credssp(true)
         .with_server_pointer(true)
@@ -180,16 +280,17 @@ pub async fn run() -> anyhow::Result<()> {
         }))
         .build()?;
     let (outputs, mut receiver) = output_channel(16);
-    let client = RdpClient::new(engine_config, outputs).with_auto_reconnect(0);
+    let mut client = RdpClient::new(engine_config, outputs).with_auto_reconnect(0);
     let input = client.input_sender();
-    let controls = Arc::new(Mutex::new(Controls {
-        owner: None,
-        epoch: 0,
-        keys: HashSet::new(),
-        buttons: HashSet::new(),
-        attached: HashSet::new(),
-        ready: HashSet::new(),
-    }));
+    let clipboard = if config.clipboard_support {
+        let bridge = super::clipboard::Clipboard::new(input.clone())?;
+        client = client.with_cliprdr_backend_factory(Box::new(bridge.clone()));
+        Some(bridge)
+    } else {
+        None
+    };
+    let mut clipboard_status = clipboard.as_ref().map(|value| value.subscribe());
+    let controls = Arc::new(Mutex::new(Controls::default()));
     let (state, _) = watch::channel(Snapshot {
         revision: 0,
         state: "connecting".into(),
@@ -197,6 +298,17 @@ pub async fn run() -> anyhow::Result<()> {
         cursor: json!({"kind":"default"}),
         owner: None,
         epoch: 0,
+        ui_locked: false,
+        clipboard_enabled: false,
+        clipboard_state: "disabled".into(),
+        ui_revision: 0,
+        frame_revision: 0,
+        frame_time: 0,
+        cursor_revision: 0,
+        cursor_time: 0,
+        position: None,
+        input_revision: 0,
+        input_time: 0,
     });
     let state = Arc::new(state);
     let listener = super::listener::bind_browser_listener().await?;
@@ -224,21 +336,163 @@ pub async fn run() -> anyhow::Result<()> {
     let mut engine = Box::pin(client.run());
     let mut engine_done = false;
     let mut displays = tokio::task::JoinSet::new();
+    let mut captures = tokio::task::JoinSet::new();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
     let connection_deadline = tokio::time::sleep(Duration::from_secs(30));
     tokio::pin!(connection_deadline);
     let mut established = false;
     let mut terminal = false;
+    let mut timed_input: Option<(Value, super::input::TimedInput)> = None;
+    let releases = release_detached_inputs(controls.clone(), input.clone());
+    tokio::pin!(releases);
     loop {
+        let next_input_at = timed_input
+            .as_ref()
+            .map_or_else(Instant::now, |(_, gesture)| {
+                gesture.next_at.min(gesture.deadline)
+            });
         tokio::select! {
             _ = &mut engine, if !engine_done => { engine_done = true; },
+            _ = &mut releases => {},
+            _ = tokio::time::sleep_until(next_input_at), if timed_input.is_some() => {
+                let mut owner = controls.lock().expect("controls");
+                let (_, gesture) = timed_input.as_mut().expect("pending input");
+                // Old UI releases must enter the queue before subsequent tool input.
+                let outcome = owner.release_detached(&input).and_then(|()| gesture.advance(&input, Instant::now()));
+                if outcome.is_ok() {
+                    let position = gesture.position();
+                    if let Some(position) = position { owner.position = position; }
+                    publish(&state, |snapshot| {
+                        snapshot.input_revision += 1; snapshot.input_time = now_ms();
+                        if let Some(position) = position {
+                            snapshot.position = Some(position); snapshot.cursor_revision += 1; snapshot.cursor_time = snapshot.input_time;
+                        }
+                    });
+                }
+                match outcome {
+                    Ok(false) => {},
+                    Ok(true) => {
+                        let (request, _) = timed_input.take().expect("completed input");
+                        let epoch = owner.epoch;
+                        emit(json!({"request":request,"result":{"accepted":true,"epoch":epoch,"input_revision":state.borrow().input_revision}}));
+                    },
+                    Err(error) => {
+                        let (request, _) = timed_input.take().expect("failed input");
+                        // Report partial dispatch without inventing releases or changing the connection.
+                        emit(json!({"request":request,"error":error.to_string()}));
+                    }
+                }
+            },
+            changed = async {
+                match &mut clipboard_status {
+                    Some(status) => status.changed().await.ok(),
+                    None => std::future::pending().await,
+                }
+            } => {
+                if changed.is_none() { clipboard_status = None; continue; }
+                let value = *clipboard_status.as_ref().unwrap().borrow();
+                publish(&state, |snapshot| snapshot.clipboard_state = value.into());
+                emit(json!({"clipboardState":value}));
+            },
             command = command_rx.recv() => {
                 let Some(command) = command else { break };
                 let request = command.get("request").cloned().unwrap_or(Value::Null);
-                let outcome = (|| -> anyhow::Result<Value> {
+                if command["method"] == "screenshot" {
+                    let snapshot = state.borrow().clone();
+                    while captures.try_join_next().is_some() {}
+                    if !captures.is_empty() { emit(json!({"request":request,"error":"RDP_SCREENSHOT_BUSY"})); continue; }
+                    let Some(image) = snapshot.image else { emit(json!({"request":request,"error":"RDP_FRAME_UNAVAILABLE"})); continue; };
+                    let include_cursor = command["includeCursor"].as_bool().unwrap_or(true);
+                    let captured_at = now_ms();
+                    captures.spawn_blocking(move || {
+                        match super::screenshot::capture(&image, &snapshot.cursor, snapshot.position, include_cursor) {
+                            Ok(shot) => {
+                                let metadata = json!({"width":shot.width,"height":shot.height,"coordinate_system":"desktop_pixels",
+                                    "captured_at":captured_at,"state":snapshot.state,"stale":snapshot.state != "connected",
+                                    "frame_revision":snapshot.frame_revision,"frame_time":snapshot.frame_time,
+                                    "cursor_revision":snapshot.cursor_revision,"cursor_time":snapshot.cursor_time,
+                                    "cursor_position":snapshot.position.map(|(x,y)| json!({"x":x,"y":y})),
+                                    "cursor_kind":snapshot.cursor["kind"],"cursor_drawn":shot.cursor_drawn,
+                                    "input_revision":snapshot.input_revision,"input_time":snapshot.input_time,"ui_locked":snapshot.ui_locked});
+                                emit(json!({"request":request,"result":[{"type":"text","text":metadata.to_string()},
+                                    {"type":"image","mimeType":"image/png","data":shot.data}]}));
+                            },
+                            Err(_) => emit(json!({"request":request,"error":"RDP_SCREENSHOT_FAILED"})),
+                        }
+                    });
+                    continue;
+                }
+                let outcome = (|| -> anyhow::Result<Option<Value>> {
                     let method = command["method"].as_str().context("missing method")?;
                     let mut owner = controls.lock().expect("controls");
-                    if method == "lease" { return Ok(json!({"owner":owner.owner,"epoch":owner.epoch})); }
+                    if method == "lease" { return Ok(Some(json!({"owner":owner.owner,"epoch":owner.epoch}))); }
+                    if method == "setClipboardActivity" {
+                        let active = command["active"].as_bool().context("RDP_CLIPBOARD_UNAVAILABLE")?;
+                        let can_publish = command["publish"].as_bool().context("RDP_CLIPBOARD_UNAVAILABLE")?;
+                        clipboard.as_ref().context("RDP_CLIPBOARD_UNAVAILABLE")?.set_activity(active, can_publish)?;
+                        return Ok(Some(json!({"active":active,"publish":can_publish})));
+                    }
+                    if method == "setClipboardEnabled" {
+                        if state.borrow().state != "connected" { bail!("RDP_NOT_CONNECTED"); }
+                        let enabled = command["enabled"].as_bool().context("RDP_CLIPBOARD_UNAVAILABLE")?;
+                        clipboard.as_ref().context("RDP_CLIPBOARD_UNAVAILABLE")?.set_enabled(enabled)?;
+                        publish(&state, |snapshot| snapshot.clipboard_enabled = enabled);
+                        emit(json!({"clipboardEnabled":enabled}));
+                        return Ok(Some(json!({"enabled":enabled,"revision":state.borrow().revision})));
+                    }
+                    if method == "setUiLocked" {
+                        let locked = command["locked"].as_bool().context("RDP_INVALID_LOCK")?;
+                        if state.borrow().state != "connected" { bail!("RDP_NOT_CONNECTED"); }
+                        owner.set_ui_locked(locked, &input)?;
+                        publish(&state, |snapshot| { snapshot.ui_locked = owner.ui_locked; snapshot.ui_revision = owner.ui_revision; });
+                        emit(json!({"uiLocked":owner.ui_locked}));
+                        return Ok(Some(json!({"ui_locked":owner.ui_locked,"uiRevision":owner.ui_revision})));
+                    }
+                    if method == "resetKeyboard" {
+                        if state.borrow().state != "connected" { bail!("RDP_NOT_CONNECTED"); }
+                        owner.reset_keyboard(&input)?;
+                        // Commit the interruption only after Synchronize was accepted by the queue.
+                        if let Some((interrupted, _)) = timed_input.take() {
+                            emit(json!({"request":interrupted,"error":"RDP_INPUT_RESET"}));
+                        }
+                        publish(&state, |snapshot| {
+                            snapshot.input_revision += 1; snapshot.input_time = now_ms();
+                        });
+                        return Ok(Some(json!({"accepted":true,"toggle_flags":0,"input_revision":state.borrow().input_revision})));
+                    }
+                    if method == "input" {
+                        if timed_input.is_some() { bail!("RDP_INPUT_BUSY"); }
+                        let snapshot = state.borrow().clone();
+                        if snapshot.state != "connected" { bail!("RDP_NOT_CONNECTED"); }
+                        let image = snapshot.image.context("RDP_FRAME_UNAVAILABLE")?;
+                        let width = u32::from_le_bytes(image[0..4].try_into()?);
+                        let height = u32::from_le_bytes(image[4..8].try_into()?);
+                        let batch = super::input::batch(&command["actions"], width, height)
+                            .map_err(|error| anyhow::anyhow!("RDP_INVALID_INPUT: {error}"))?;
+                        let interval = batch.interval(command.get("interval_ms")).map_err(|error| anyhow::anyhow!("RDP_INVALID_INPUT: {error}"))?;
+                        let remaining_ms = match command.get("deadline_ms") {
+                            Some(value) => value.as_u64().context("RDP_INVALID_INPUT: invalid deadline")?.saturating_sub(now_ms()),
+                            None => super::input::INPUT_TIMEOUT_MS,
+                        };
+                        let remaining = Duration::from_millis(remaining_ms.min(super::input::INPUT_TIMEOUT_MS));
+                        if remaining.is_zero() || batch.duration(interval) >= remaining { bail!("RDP_INPUT_TIMEOUT"); }
+                        if !batch.duration(interval).is_zero() {
+                            let now = Instant::now();
+                            timed_input = Some((request.clone(), super::input::TimedInput::new(batch, interval, now, now + remaining)));
+                            return Ok(None);
+                        }
+                        // Flush an earlier page's releases first; never track tool-held keys.
+                        owner.release_detached(&input)?;
+                        input.try_send(RdpInputEvent::FastPath(batch.events)).map_err(|_| anyhow::anyhow!("RDP_INPUT_UNAVAILABLE"))?;
+                        if let Some(position) = batch.position { owner.position = position; }
+                        publish(&state, |snapshot| {
+                            snapshot.input_revision += 1; snapshot.input_time = now_ms();
+                            if let Some(position) = batch.position {
+                                snapshot.position = Some(position); snapshot.cursor_revision += 1; snapshot.cursor_time = snapshot.input_time;
+                            }
+                        });
+                        return Ok(Some(json!({"accepted":true,"epoch":owner.epoch,"input_revision":state.borrow().input_revision})));
+                    }
                     let expected = command["expected"].as_str();
                     if owner.owner.as_deref() != expected || command["expectedEpoch"].as_u64() != Some(owner.epoch) { bail!("ownership changed"); }
                     if method != "claim" && method != "release" { bail!("unknown command"); }
@@ -248,14 +502,14 @@ pub async fn run() -> anyhow::Result<()> {
                         Some(page.to_owned())
                     } else { None };
                     owner.release(&input)?;
-                    owner.epoch += 1;
-                    owner.owner = page;
+                    owner.set_owner(page);
                     publish(&state, |snapshot| { snapshot.owner = owner.owner.clone(); snapshot.epoch = owner.epoch; });
-                    Ok(json!({"owner":owner.owner,"epoch":owner.epoch}))
+                    Ok(Some(json!({"owner":owner.owner,"epoch":owner.epoch})))
                 })();
                 match outcome {
-                    Ok(result) => emit(json!({"request":request,"result":result})),
-                    Err(_) => emit(json!({"request":request,"error":"RDP_OWNERSHIP_CHANGED"})),
+                    Ok(None) => {},
+                    Ok(Some(result)) => emit(json!({"request":request,"result":result})),
+                    Err(error) => { let message = error.to_string(); emit(json!({"request":request,"error":if message.starts_with("RDP_") { &message } else { "RDP_OWNERSHIP_CHANGED" }})); },
                 }
             },
             _ = &mut connection_deadline, if !established && !terminal => {
@@ -275,15 +529,16 @@ pub async fn run() -> anyhow::Result<()> {
                 match event {
                     RdpOutputEvent::Connected => { established = true; publish(&state, |snapshot| snapshot.state = "connected".into()); emit(json!({"status":"connected"})); },
                     RdpOutputEvent::Image { buffer, width, height } => match frame(buffer, width.get(), height.get()) {
-                        Ok(image) => publish(&state, |snapshot| snapshot.image = Some(image)),
+                        Ok(image) => publish(&state, |snapshot| { snapshot.image = Some(image); snapshot.frame_revision += 1; snapshot.frame_time = now_ms(); }),
                         Err(_) => { input.request_close(); terminal = true; publish(&state, |snapshot| snapshot.state = "connection_failed".into()); emit(json!({"status":"connection_failed"})); }
                     },
-                    RdpOutputEvent::PointerDefault => publish(&state, |snapshot| snapshot.cursor = json!({"kind":"default"})),
-                    RdpOutputEvent::PointerHidden => publish(&state, |snapshot| snapshot.cursor = json!({"kind":"hidden"})),
+                    RdpOutputEvent::PointerDefault => publish(&state, |snapshot| { snapshot.cursor = json!({"kind":"default"}); snapshot.cursor_revision += 1; snapshot.cursor_time = now_ms(); }),
+                    RdpOutputEvent::PointerHidden => publish(&state, |snapshot| { snapshot.cursor = json!({"kind":"hidden"}); snapshot.cursor_revision += 1; snapshot.cursor_time = now_ms(); }),
+                    RdpOutputEvent::PointerPosition { x, y } => state.send_modify(|snapshot| { snapshot.position = Some((x, y)); snapshot.cursor_revision += 1; snapshot.cursor_time = now_ms(); }),
                     RdpOutputEvent::PointerBitmap(pointer) => {
                         if pointer.bitmap_data.len() <= 1024 * 1024 {
-                            publish(&state, |snapshot| snapshot.cursor = json!({"kind":"bitmap","width":pointer.width,"height":pointer.height,
-                                "x":pointer.hotspot_x,"y":pointer.hotspot_y,"pixels":pointer.bitmap_data}));
+                            publish(&state, |snapshot| { snapshot.cursor = json!({"kind":"bitmap","width":pointer.width,"height":pointer.height,
+                                "x":pointer.hotspot_x,"y":pointer.hotspot_y,"pixels":pointer.bitmap_data}); snapshot.cursor_revision += 1; snapshot.cursor_time = now_ms(); });
                         }
                     },
                     RdpOutputEvent::ConnectionFailure(_) | RdpOutputEvent::Terminated(_) => {
@@ -305,11 +560,18 @@ pub async fn run() -> anyhow::Result<()> {
                 }
             },
             Some(_) = displays.join_next(), if !displays.is_empty() => {},
+            Some(_) = captures.join_next(), if !captures.is_empty() => {},
         }
         // A terminal RDP result ends the resource; losing presentation pages does not.
         if terminal {
             break;
         }
+    }
+    if let Some((request, _)) = timed_input.take() {
+        emit(json!({"request":request,"error":"RDP_SESSION_CLOSED"}));
+    }
+    if let Some(clipboard) = &clipboard {
+        clipboard.close();
     }
     input.request_close();
     displays.abort_all();
@@ -404,7 +666,7 @@ async fn display(
                 let snapshot = updates.borrow_and_update().clone();
                 if sent_revision == Some(snapshot.revision) { continue; }
                 timeout(IO_TIMEOUT, ws.send(Message::Text(json!({"type":"snapshot","revision":snapshot.revision,"state":snapshot.state,
-                    "cursor":snapshot.cursor,"owner":snapshot.owner,"epoch":snapshot.epoch,"image":snapshot.image.is_some()}).to_string().into()))).await??;
+                    "cursor":snapshot.cursor,"owner":snapshot.owner,"epoch":snapshot.epoch,"clipboardEnabled":snapshot.clipboard_enabled,"clipboardState":snapshot.clipboard_state,"uiLocked":snapshot.ui_locked,"uiRevision":snapshot.ui_revision,"image":snapshot.image.is_some()}).to_string().into()))).await??;
                 let complete_image = snapshot.state == "connected" && snapshot.image.is_some();
                 if let Some(image) = snapshot.image { timeout(IO_TIMEOUT, ws.send(Message::Binary(image))).await??; }
                 pending = Some((snapshot.revision, Instant::now(), complete_image));
@@ -423,8 +685,26 @@ async fn display(
                         }
                     } else {
                         let mut owner = controls.lock().expect("controls");
+                        // Both transitions invalidate old UI events, including events queued while locked.
+                        if !owner.accepts_ui(message["uiRevision"].as_u64()) { continue; }
+                        if message["type"] == "takeover" {
+                            if message["epoch"].as_u64() == Some(owner.epoch) && owner.ready.contains(&page) {
+                                owner.release(&input)?;
+                                owner.set_owner(Some(page.clone()));
+                                publish(&state, |snapshot| { snapshot.owner = owner.owner.clone(); snapshot.epoch = owner.epoch; });
+                            }
+                            continue;
+                        }
                         if owner.owner.as_deref() != Some(&page) || message["epoch"].as_u64() != Some(owner.epoch) { continue; }
                         handle_input(&message, &mut owner, &input)?;
+                        // Metadata for capture only; input must not retransmit the full frame.
+                        state.send_modify(|snapshot| {
+                            snapshot.input_revision += 1; snapshot.input_time = now_ms();
+                            if message["type"] == "mouse" {
+                                snapshot.position = Some((message["x"].as_u64().unwrap_or(0) as u16, message["y"].as_u64().unwrap_or(0) as u16));
+                                snapshot.cursor_revision += 1; snapshot.cursor_time = snapshot.input_time;
+                            }
+                        });
                     }
                 },
                 Some(Ok(Message::Ping(_))) => { timeout(IO_TIMEOUT, ws.flush()).await??; },
@@ -479,6 +759,7 @@ fn handle_input(value: &Value, owner: &mut Controls, input: &RdpInputSender) -> 
                     number_of_wheel_rotation_units: wheel,
                 }),
             )?;
+            owner.position = (x, y);
             for button in [0x1000, 0x2000, 0x4000] {
                 if bits & button != 0 {
                     if bits & 0x8000 != 0 {
@@ -512,11 +793,9 @@ impl Drop for DisplayLease {
             return;
         }
         if owner.release(&self.input).is_err() {
-            self.input.request_close();
-            publish(&self.state, |snapshot| {
-                snapshot.state = "connection_failed".into()
-            });
-            emit(json!({"status":"connection_failed"}));
+            // A full input queue is temporary backpressure, not a failed session.
+            // Retain the local UI keys/buttons until their releases can be queued.
+            owner.release_wakeup.notify_one();
         }
         owner.owner = None;
         owner.epoch += 1;
@@ -524,5 +803,197 @@ impl Drop for DisplayLease {
             snapshot.owner = None;
             snapshot.epoch = owner.epoch;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ironrdp_pdu::input::fast_path::SynchronizeFlags;
+
+    #[test]
+    fn fixed_resolution_defaults_and_limits() {
+        let mut value = json!({"host":"test.invalid","username":"fixture","password":"","token":"test","origin":"test"});
+        let default: Configuration = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!((default.desktop_width, default.desktop_height), (1280, 800));
+        value["desktop_width"] = json!(1024);
+        value["desktop_height"] = json!(768);
+        let custom: Configuration = serde_json::from_value(value).unwrap();
+        assert_eq!((custom.desktop_width, custom.desktop_height), (1024, 768));
+        for (width, height) in [(1024, 768), (200, 200), (8192, 2048), (3840, 2160)] {
+            validate_resolution(width, height).unwrap();
+        }
+        for (width, height) in [
+            (0, 800),
+            (1280, 0),
+            (199, 800),
+            (1281, 800),
+            (8194, 800),
+            (1280, 8193),
+            (8192, 8192),
+        ] {
+            assert!(validate_resolution(width, height).is_err());
+        }
+    }
+
+    fn connected_state() -> Arc<watch::Sender<Snapshot>> {
+        Arc::new(
+            watch::channel(Snapshot {
+                revision: 0,
+                state: "connected".into(),
+                image: None,
+                cursor: Value::Null,
+                owner: Some("page".into()),
+                epoch: 0,
+                ui_locked: false,
+                clipboard_enabled: false,
+                clipboard_state: "disabled".into(),
+                ui_revision: 0,
+                frame_revision: 0,
+                frame_time: 0,
+                cursor_revision: 0,
+                cursor_time: 0,
+                position: None,
+                input_revision: 0,
+                input_time: 0,
+            })
+            .0,
+        )
+    }
+
+    #[tokio::test]
+    async fn closing_a_page_retries_full_queue_releases_without_closing_the_session() {
+        let (input, mut receiver) = RdpInputSender::channel(1);
+        send(&input, super::super::input::key(30, false, true)).unwrap();
+        let controls = Arc::new(Mutex::new(Controls::default()));
+        {
+            let mut owner = controls.lock().unwrap();
+            owner.owner = Some("page".into());
+            owner.keys.insert((30, false));
+            owner.buttons.insert(0x1000);
+        }
+        let state = connected_state();
+        let retry = tokio::spawn(release_detached_inputs(controls.clone(), input.clone()));
+        drop(DisplayLease {
+            page: "page".into(),
+            controls: controls.clone(),
+            input: input.clone(),
+            state: state.clone(),
+        });
+        assert_eq!(state.borrow().state, "connected");
+        assert_eq!(state.borrow().owner, None);
+        assert!(controls.lock().unwrap().keys.contains(&(30, false)));
+        receiver.recv().await.unwrap();
+        let RdpInputEvent::FastPath(events) = timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("expected releases")
+        };
+        assert_eq!(
+            &events[..],
+            &[
+                super::super::input::key(30, false, false),
+                super::super::input::mouse(0, 0, 0x1000, 0),
+            ]
+        );
+        assert!(controls.lock().unwrap().keys.is_empty());
+        assert!(controls.lock().unwrap().buttons.is_empty());
+        assert_eq!(state.borrow().state, "connected");
+        send(&input, super::super::input::key(29, false, true)).unwrap();
+        assert!(receiver.try_recv().is_ok());
+        retry.abort();
+    }
+
+    #[tokio::test]
+    async fn delayed_page_cleanup_does_not_release_later_tool_or_new_page_keys() {
+        let (input, mut receiver) = RdpInputSender::channel(1);
+        send(&input, super::super::input::key(29, false, true)).unwrap();
+        let controls = Arc::new(Mutex::new(Controls::default()));
+        {
+            let mut owner = controls.lock().unwrap();
+            owner.owner = Some("page".into());
+            owner.keys.insert((29, false));
+        }
+        drop(DisplayLease {
+            page: "page".into(),
+            controls: controls.clone(),
+            input: input.clone(),
+            state: connected_state(),
+        });
+        receiver.recv().await.unwrap();
+        // Tool dispatch flushes the old UI release before its own down, without
+        // registering the tool's held key for future UI cleanup.
+        controls.lock().unwrap().release_detached(&input).unwrap();
+        let RdpInputEvent::FastPath(events) = receiver.recv().await.unwrap() else {
+            panic!("expected release")
+        };
+        assert_eq!(&events[..], &[super::super::input::key(29, false, false)]);
+        send(&input, super::super::input::key(29, false, true)).unwrap();
+        receiver.recv().await.unwrap();
+        let retry = tokio::spawn(release_detached_inputs(controls.clone(), input.clone()));
+        assert!(
+            timeout(Duration::from_millis(30), receiver.recv())
+                .await
+                .is_err()
+        );
+        {
+            let mut owner = controls.lock().unwrap();
+            owner.owner = Some("new-page".into());
+            owner.keys.insert((30, false));
+            owner.release_wakeup.notify_one();
+        }
+        assert!(
+            timeout(Duration::from_millis(30), receiver.recv())
+                .await
+                .is_err()
+        );
+        assert!(controls.lock().unwrap().keys.contains(&(30, false)));
+        retry.abort();
+    }
+
+    #[test]
+    fn explicit_reset_queues_zero_flag_synchronize_and_preserves_connection_controls() {
+        let (input, mut receiver) = RdpInputSender::channel(1);
+        let mut controls = Controls {
+            owner: Some("page".into()),
+            epoch: 7,
+            ui_locked: true,
+            ui_revision: 9,
+            ..Default::default()
+        };
+        controls.keys.extend([(30, false), (29, false), (56, true)]);
+        controls.reset_keyboard(&input).unwrap();
+        let RdpInputEvent::FastPath(events) = receiver.try_recv().unwrap() else {
+            panic!("expected input");
+        };
+        assert_eq!(
+            &events[..],
+            &[FastPathInputEvent::SyncEvent(SynchronizeFlags::empty())]
+        );
+        assert!(controls.keys.is_empty());
+        assert_eq!(controls.owner.as_deref(), Some("page"));
+        assert_eq!(controls.epoch, 7);
+        assert!(controls.ui_locked);
+        assert_eq!(controls.ui_revision, 9);
+        controls.release(&input).unwrap();
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn rejected_reset_preserves_local_ui_key_tracking() {
+        let (input, mut receiver) = RdpInputSender::channel(1);
+        let mut controls = Controls::default();
+        controls.keys.insert((30, false));
+        send(&input, super::super::input::key(30, false, true)).unwrap();
+        assert_eq!(
+            controls.reset_keyboard(&input).unwrap_err().to_string(),
+            "RDP_INPUT_UNAVAILABLE"
+        );
+        assert!(controls.keys.contains(&(30, false)));
+        receiver.try_recv().unwrap();
+        controls.reset_keyboard(&input).unwrap();
+        assert!(controls.keys.is_empty());
     }
 }

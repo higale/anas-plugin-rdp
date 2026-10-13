@@ -9,6 +9,7 @@ const component = process.env.RDP_BUILD_COMPONENT ?? 'all';
 if (!['all', 'web', 'native'].includes(component)) throw new Error('Invalid build component.');
 const out = resolve(root, component === 'all' ? 'dist' : `artifacts/components/${component}`);
 const { version } = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
+const tools = JSON.parse(readFileSync(resolve(root, 'tools.json'), 'utf8'));
 if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Use a three-part plugin version.');
 if (!['win32', 'darwin'].includes(process.platform) || !['x64', 'arm64'].includes(process.arch)) throw new Error('Build on a supported Windows/macOS architecture.');
 const nativeTarget = `${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}-${process.platform === 'win32' ? 'pc-windows-msvc' : 'apple-darwin'}`;
@@ -28,8 +29,9 @@ if (component !== 'native') {
   cpSync(resolve(root, 'third-party'), resolve(out, 'third-party'), { recursive: true });
   cpSync(resolve(root, 'docs/USER_GUIDE.md'), resolve(out, 'USER_GUIDE.md'));
   cpSync(resolve(root, 'lang'), resolve(out, 'lang'), { recursive: true });
+  cpSync(resolve(root, 'skills'), resolve(out, 'skills'), { recursive: true });
   cpSync(resolve(root, 'assets'), resolve(out, 'assets'), { recursive: true });
-  writeFileSync(resolve(out, 'PLUGIN.json'), JSON.stringify({ version: 0, id: 'rdp', name: 'Remote Desktop', icon: 'assets/remote-desktop.svg', lang: 'lang', home: { default_location: 'sidebar', locations: ['sidebar', 'window'] }, plugin_version: version, api_version: 2, platforms: component === 'web' ? ['win32', 'darwin'] : [process.platform], ui: 'index.html', backend: 'backend.cjs' }, null, 2) + '\n');
+  writeFileSync(resolve(out, 'PLUGIN.json'), JSON.stringify({ version: 0, id: 'rdp', name: 'Remote Desktop', icon: 'assets/remote-desktop.svg', lang: 'lang', home: { default_location: 'sidebar', locations: ['sidebar', 'window'] }, plugin_version: version, api_version: 2, platforms: component === 'web' ? ['win32', 'darwin'] : [process.platform], ui: 'index.html', backend: 'backend.cjs', tools, skills: [{ id: 'remote-desktop', path: 'skills/remote-desktop/SKILL.md', tools: ['list_profiles', 'connect', 'list_sessions', 'screenshot', 'input', 'reset_keyboard', 'set_ui_locked', 'show_desktop', 'disconnect'] }] }, null, 2) + '\n');
 }
 if (component !== 'web') {
   const binary = `anas-rdp-session${process.platform === 'win32' ? '.exe' : ''}`;
@@ -43,5 +45,5 @@ if (component !== 'web') {
 }
 cpSync(resolve(root, 'artifacts/licenses'), resolve(out, 'third-party/dependencies'), { recursive: true });
 const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
-writeFileSync(resolve(out, 'BUILD.json'), JSON.stringify({ version, component, plugin_commit: git('rev-parse', 'HEAD'), dirty: Boolean(git('status', '--porcelain')), platform: process.platform, architecture: process.arch, native_target: component === 'web' ? null : nativeTarget, node: process.version, rust: rustInfo.split(/\r?\n/)[0], host_dependency: { api_version: 2, capabilities: ['getContext', 'registerLifecycle', 'ready', 'moveView', 'onViewChanged', 'setToolbar', 'onToolbarAction'] }, upstream: JSON.parse(readFileSync(resolve(root, 'upstream.lock.json'), 'utf8')), locks_sha256: Object.fromEntries(['package-lock.json', 'native/Cargo.lock'].map(name => [name, createHash('sha256').update(readFileSync(resolve(root, name))).digest('hex')])) }, null, 2) + '\n');
+writeFileSync(resolve(out, 'BUILD.json'), JSON.stringify({ version, component, plugin_commit: git('rev-parse', 'HEAD'), dirty: Boolean(git('status', '--porcelain')), platform: process.platform, architecture: process.arch, native_target: component === 'web' ? null : nativeTarget, node: process.version, rust: rustInfo.split(/\r?\n/)[0], host_dependency: { api_version: 2, capabilities: ['getContext', 'registerLifecycle', 'ready', 'moveView', 'onViewChanged', 'setToolbar', 'onToolbarAction', 'resizeWindow', 'host.getViews', 'host.onViewsChanged'] }, upstream: JSON.parse(readFileSync(resolve(root, 'upstream.lock.json'), 'utf8')), locks_sha256: Object.fromEntries(['package-lock.json', 'native/Cargo.lock'].map(name => [name, createHash('sha256').update(readFileSync(resolve(root, name))).digest('hex')])) }, null, 2) + '\n');
 console.log(`Built ${component}: ${out}`);

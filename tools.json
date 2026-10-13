@@ -1,0 +1,597 @@
+[
+  {
+    "id": "connect",
+    "handler": "connect",
+    "description": "Connect to a saved RDP server without opening a desktop, or reuse its live session. First list_profiles to get the profile_id and current revision. Uses the saved password and existing certificate trust; missing passwords or certificate approval require the plugin UI. Waits for actual connection state and returns a session ID, ui_locked and view (null means no desktop page). profile.openMode is only a display preference. To show the desktop, call show_desktop with the returned session ID. Connections remain available independently of tool calls and conversations, until explicitly disconnected, closed under the desktop close policy, or the plugin stops.",
+    "effect": "confirm",
+    "timeout_seconds": 45,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "profile_id",
+        "revision"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "id": "list_profiles",
+    "handler": "list_profiles",
+    "description": "List saved remote desktop server profiles, including whether a password is saved. Passwords are never returned. Profile IDs differ from live session IDs.",
+    "effect": "read",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
+    "id": "list_sessions",
+    "handler": "list_sessions",
+    "description": "List RDP session IDs, server profiles, actual connection states certificate status and ui_locked state. Includes sessions created by the user and sessions awaiting certificate approval. Does not start a connection or open a page.",
+    "effect": "read",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
+    "id": "screenshot",
+    "handler": "screenshot",
+    "description": "Capture the remote desktop of an existing RDP session as a PNG image, even with no desktop page open. Returns desktop pixel dimensions and frame, cursor and input timestamps. The image uses original desktop coordinates without scaling. Cursor is included when its position is known unless include_cursor is false. A screenshot observes the current received frame; it does not confirm that preceding remote actions have completed. Use list_sessions to obtain a session ID.",
+    "effect": "read",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "include_cursor": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "id": "disconnect",
+    "handler": "disconnect",
+    "description": "Disconnect an RDP session and release its native connection. Any desktop displaying that session will be disconnected too. Does not delete the saved server profile. An already absent session is treated as closed. Use list_sessions to obtain a session ID.",
+    "effect": "idempotent",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "id": "get_profile",
+    "handler": "get_profile",
+    "description": "Read one saved server profile and its current revision. Never returns its password.",
+    "effect": "read",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      },
+      "required": [
+        "profile_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "id": "add_profile",
+    "handler": "add_profile",
+    "description": "Add a saved server profile. Supply changes.host; omitted fields use defaults: name=host, port=3389, empty username/domain, sidebar location, background running=false. Configure passwords and certificate trust in the desktop UI.",
+    "effect": "confirm",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "changes": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "host": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "username": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "domain": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "open_mode": {
+              "type": "string",
+              "enum": [
+                "sidebar",
+                "window"
+              ]
+            },
+            "run_in_background": {
+              "type": "boolean"
+            },
+            "desktop_width": {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 8192,
+              "multipleOf": 2,
+              "description": "Fixed desktop width in pixels. Defaults to 1280 for new profiles. Width × height must not exceed 16,777,216 pixels; applies to the next new connection."
+            },
+            "desktop_height": {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 8192,
+              "description": "Fixed desktop height in pixels. Defaults to 800 for new profiles. Width × height must not exceed 16,777,216 pixels; applies to the next new connection."
+            },
+            "clipboard_support": {
+              "type": "boolean",
+              "description": "Negotiate clipboard support on the next connection. Default false. Runtime clipboard sync remains off until explicitly enabled in the desktop toolbar."
+            }
+          },
+          "minProperties": 1,
+          "additionalProperties": false,
+          "required": [
+            "host"
+          ]
+        }
+      },
+      "required": [
+        "changes"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "id": "update_profile",
+    "handler": "update_profile",
+    "description": "Update only the supplied fields of a saved server profile, preserving all other fields and its password. Requires its latest revision. Refuses changes while the server is being edited, opened or running. Passwords and certificate trust use the desktop UI.",
+    "effect": "confirm",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "changes": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "host": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "username": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "domain": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "open_mode": {
+              "type": "string",
+              "enum": [
+                "sidebar",
+                "window"
+              ]
+            },
+            "run_in_background": {
+              "type": "boolean"
+            },
+            "desktop_width": {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 8192,
+              "multipleOf": 2,
+              "description": "Fixed desktop width in pixels. Defaults to 1280 for new profiles. Width × height must not exceed 16,777,216 pixels; applies to the next new connection."
+            },
+            "desktop_height": {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 8192,
+              "description": "Fixed desktop height in pixels. Defaults to 800 for new profiles. Width × height must not exceed 16,777,216 pixels; applies to the next new connection."
+            },
+            "clipboard_support": {
+              "type": "boolean",
+              "description": "Negotiate clipboard support on the next connection. Default false. Runtime clipboard sync remains off until explicitly enabled in the desktop toolbar."
+            }
+          },
+          "minProperties": 1,
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "profile_id",
+        "revision",
+        "changes"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "id": "delete_profile",
+    "handler": "delete_profile",
+    "description": "Delete one saved server profile at the supplied revision. Does not disconnect a running session or remove certificate trust; running or edited profiles cannot be deleted. A missing profile is an error, not proof that a prior attempt succeeded.",
+    "effect": "confirm",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "profile_id",
+        "revision"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "id": "input",
+    "handler": "input",
+    "description": "Send ordered desktop input exactly as requested. press(key) sends down, holds 50 ms, then up; hotkey(keys) sends downs in array order, holds 50 ms, then ups in reverse. Repeat by listing actions again. Use uppercase key names without separators: A-Z, 0-9, F1-F12, CTRL, SHIFT, ALT, WIN, ENTER, ESC, SPACE, TAB, BACKSPACE, LEFT/UP/RIGHT/DOWN, PAGEDOWN, PAGEUP, HOME, END, INSERT, DELETE, or uppercase browser KeyboardEvent.code names such as ALTRIGHT. Raw key(code 1-127, extended, down) and button(left/right/middle, down) send only that event; no automatic release or held-key tracking. A down can span calls, screenshots and page moves; send an explicit up when intended. press/hotkey always send their ups, including for previously held keys. Mouse move/button/wheel use original screenshot pixels; wheel delta is -256..255, nonzero. Top-level interval_ms (0-1000, default 50) is the gap between completed actions; 0 is valid. text(text) sends Unicode characters as supplied, including supplementary characters, in batches of at most 8 Unicode characters with 50 ms settling after each batch, including the last. Text is not trimmed, newline-converted or given an appended Enter. Each text action accepts 1-4096 Unicode characters; the whole actions array must fit 12000 UTF-8 bytes when JSON-serialized. A whole text is one action for interval_ms; 0 does not disable internal text pacing. The execution deadline is 300 seconds, including all actions, pacing and delays. After 10 seconds Anas may return a background call ID: wait for that same call, do not resend input. Use a following press ENTER or hotkey CTRL+ENTER when intended; do not rely on text control characters to act as physical keys. Application support varies; no clipboard or keyboard-layout fallback. The receipt confirms queue acceptance, not remote completion. Concurrent input returns RDP_INPUT_BUSY. After dispatch, caller cancellation does not interrupt the requested sequence; the original execution deadline or a send failure stops remaining steps without extra releases or rollback and does not stop the connection or plugin backend. Disconnection also stops pending input. A deadline error may follow partial input. An explicit reset_keyboard interrupts a pending sequence with RDP_INPUT_RESET. Inspect after partial failure or a lost receipt; never blindly replay. UI and tools share the remote keyboard; use set_ui_locked explicitly when needed.",
+    "effect": "confirm",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "interval_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000,
+          "default": 50,
+          "description": "Milliseconds between complete actions (default 50). 0 disables inter-action spacing but retains press/hotkey holds and internal text pacing."
+        },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096,
+                    "description": "Unicode text sent unchanged. Whole actions JSON is limited to 12000 UTF-8 bytes, including escaping. Use press/hotkey for explicit keyboard operations."
+                  }
+                },
+                "required": [
+                  "type",
+                  "text"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "press"
+                    ]
+                  },
+                  "key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32,
+                    "description": "Use an uppercase key name without separators: A-Z, 0-9, F1-F12, CTRL, SHIFT, ALT, WIN, ENTER, ESC, SPACE, TAB, BACKSPACE, LEFT/UP/RIGHT/DOWN, PAGEDOWN, PAGEUP, HOME, END, INSERT, DELETE, or uppercase browser KeyboardEvent.code names such as ALTRIGHT."
+                  }
+                },
+                "required": [
+                  "type",
+                  "key"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "hotkey"
+                    ]
+                  },
+                  "keys": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 8,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 32,
+                      "description": "Use an uppercase key name without separators: A-Z, 0-9, F1-F12, CTRL, SHIFT, ALT, WIN, ENTER, ESC, SPACE, TAB, BACKSPACE, LEFT/UP/RIGHT/DOWN, PAGEDOWN, PAGEUP, HOME, END, INSERT, DELETE, or uppercase browser KeyboardEvent.code names such as ALTRIGHT."
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "keys"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "move"
+                  },
+                  "x": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "y": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  }
+                },
+                "required": [
+                  "type",
+                  "x",
+                  "y"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "button"
+                  },
+                  "x": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "y": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "button": {
+                    "type": "string",
+                    "enum": [
+                      "left",
+                      "right",
+                      "middle"
+                    ]
+                  },
+                  "down": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "type",
+                  "x",
+                  "y",
+                  "button",
+                  "down"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "wheel"
+                  },
+                  "x": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "y": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "delta": {
+                    "type": "integer",
+                    "minimum": -256,
+                    "maximum": 255
+                  }
+                },
+                "required": [
+                  "type",
+                  "x",
+                  "y",
+                  "delta"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "key"
+                  },
+                  "code": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 127
+                  },
+                  "extended": {
+                    "type": "boolean"
+                  },
+                  "down": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "type",
+                  "code",
+                  "down"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "session_id",
+        "actions"
+      ],
+      "additionalProperties": false
+    },
+    "timeout_seconds": 300
+  },
+  {
+    "id": "show_desktop",
+    "handler": "show_desktop",
+    "description": "Open or focus the desktop for an existing live session. Optionally move the same desktop to sidebar or window. Does not establish a new connection, duplicate a desktop. Check the returned view before reporting that a desktop is visible. Omit location to keep an existing page in place, or use the saved location for a new page.",
+    "effect": "idempotent",
+    "timeout_seconds": 60,
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "location": {
+          "type": "string",
+          "enum": [
+            "sidebar",
+            "window"
+          ]
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "id": "set_ui_locked",
+    "handler": "set_ui_locked",
+    "description": "Set the local UI input lock on an existing connected RDP session. locked=true blocks local keyboard, mouse and wheel input while keeping the desktop visible and tools usable; locked=false unlocks it. The user can always unlock manually. Lock before a sequence of desktop operations and unlock when finished. The lock belongs to the session, survives view moves and conversation completion, and is not persisted after disconnection. It does not exclude other tool callers or stop a running tool. Returns session_id and ui_locked.",
+    "effect": "idempotent",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "locked": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "session_id",
+        "locked"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "id": "reset_keyboard",
+    "handler": "reset_keyboard",
+    "description": "Explicitly reset the keyboard on an existing connected RDP session. Sends RDP Synchronize with toggle flags 0 to release all ordinary and modifier keys and turn off Caps Lock, Num Lock, Scroll Lock and Kana Lock. Interrupts any pending input sequence with RDP_INPUT_RESET so it cannot press keys again after the reset. Shared by the desktop Reset keyboard button. Does not disconnect or change the local UI lock. Call only when a reset is intended; never automatically at tool or conversation completion. Returns queue acceptance, not proof of remote completion; inspect the desktop afterward.",
+    "effect": "idempotent",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "additionalProperties": false
+    }
+  }
+]
