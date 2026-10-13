@@ -211,6 +211,7 @@ impl Clipboard {
                 let _ = ready_tx.send(true);
                 let mut sequence = None;
                 let mut enabled = false;
+                // Own the OLE offer; dropping it revokes our current virtual-file clipboard.
                 #[cfg(windows)]
                 let mut remote_files: Option<windows::Offer> = None;
                 while !worker.closed.load(Ordering::SeqCst) {
@@ -231,7 +232,7 @@ impl Clipboard {
                             worker.send(ClipboardMessage::SendInitiateCopy(vec![]));
                             #[cfg(windows)]
                             {
-                                remote_files = None;
+                                drop(remote_files.take());
                             }
                         }
                     }
@@ -258,7 +259,7 @@ impl Clipboard {
                                 }
                                 #[cfg(windows)]
                                 {
-                                    remote_files = None;
+                                    drop(remote_files.take());
                                 }
                             } else {
                                 report_error();
@@ -270,7 +271,7 @@ impl Clipboard {
                             #[cfg(windows)]
                             match windows::Offer::new(files, data_id, worker.clone(), generation) {
                                 Ok(offer) => {
-                                    remote_files = Some(offer);
+                                    drop(remote_files.replace(offer));
                                     sequence = Some(os_sequence());
                                     if let Some(remote) = worker.remote.lock().unwrap().as_mut() {
                                         remote.awaiting = false;
