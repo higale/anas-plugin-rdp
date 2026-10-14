@@ -28,10 +28,10 @@ const snapshot = join(directory, 'clipboard.plist');
 const marker = 'anas-unicode-' + randomUUID();
 const results = [];
 let views = [], viewsChanged, session, profile, saved = false, fixtureOpened = false, phase = 'prepare';
-const host = { getViews: async () => views, onViewsChanged: listener => { viewsChanged = listener; return () => { viewsChanged = undefined; }; } };
+const host = { openView: async () => {}, moveView: async () => {}, closeView: async () => {}, getViews: async () => views, onViewsChanged: listener => { viewsChanged = listener; return () => { viewsChanged = undefined; }; } };
 const context = () => ({ host, signal: new AbortController().signal, deadline: Date.now() + 45000 });
 const call = (method, params) => backend.call(method, params, { caller: null, views });
-const input = (actions, interval_ms = 80) => backend.tools.input({ session_id: session.id, actions, interval_ms }, context());
+const input = (actions, interval_ms = 80) => backend.tools.input({ profile_id: profile.id, actions, interval_ms }, context());
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(predicate, label, timeout = 20000) {
   const deadline = Date.now() + timeout;
@@ -42,23 +42,23 @@ const hash = text => createHash('sha256').update(text, 'utf8').digest('hex');
 try {
   execFileSync('clang', ['-framework', 'AppKit', 'test/fixtures/clipboard-snapshot.m', '-o', snapshotHelper], { stdio: 'ignore' });
   execFileSync(snapshotHelper, ['save', snapshot]); saved = true;
-  await backend.activate({ pluginId: 'rdp', packageDirectory: resolve('dist'), dataDirectory: join(directory, 'data'), host });
+  await backend.activate({ pluginId: 'rdp', packageDirectory: resolve('dist'), dataDirectory: join(directory, 'data'), tempDirectory: join(directory, 'tmp', 'anas-plugin-rdp'), host });
   await call('trusts.save', { host: config.host, port: config.port ?? 3389, sha256: pin });
   profile = await call('profiles.save', { ...config, name: 'Unicode verification', clipboardSupport: true, passwordAction: 'set' });
   phase = 'connect';
-  session = await backend.tools.connect({ profile_id: profile.id, revision: profile.revision }, context());
-  assert.equal(session.state, 'connected');
+  session = await backend.tools.control({ profile_id: profile.id, state: 'background' }, context());
+  assert.equal(session.connection_state, 'connected');
   views = [{ panelId: 'unicode-proof', instanceId: profile.id, location: 'window', activity: { active: true } }];
   viewsChanged(views);
   await until(async () => {
-    try { await backend.tools.screenshot({ session_id: session.id }, context()); return true; }
+    try { await backend.tools.screenshot({ profile_id: profile.id }, context()); return true; }
     catch (error) { if (!String(error).includes('RDP_FRAME_UNAVAILABLE')) throw error; return false; }
   }, 'first frame');
   await until(async () => {
-    try { await call('setClipboardEnabled', { owner: profile.id, id: session.id, enabled: true }); return true; }
+    try { await call('setClipboardEnabled', { owner: profile.id, id: session.session_id, enabled: true }); return true; }
     catch (error) { if (!String(error).includes('RDP_CLIPBOARD_UNAVAILABLE')) throw error; return false; }
   }, 'clipboard negotiation');
-  await backend.tools.reset_keyboard({ session_id: session.id }, context());
+  assert.equal((await backend.tools.control({ profile_id: profile.id, reset_input: true }, context())).ok, true);
   phase = 'open isolated remote text box';
   await input([{ type: 'hotkey', keys: ['WIN', 'R'] }]); await sleep(500);
   await input([{ type: 'text', text: 'cmd.exe /d /q' }, { type: 'press', key: 'ENTER' }]); await sleep(700);
@@ -94,7 +94,7 @@ try {
 } catch (error) {
   console.error('Unicode verification failed during:', phase);
   if (session) {
-    const blocks = await backend.tools.screenshot({ session_id: session.id }, context()).catch(() => []);
+    const blocks = await backend.tools.screenshot({ profile_id: profile.id }, context()).catch(() => []);
     const image = blocks.find(block => block.type === 'image');
     if (image) await writeFile(join(directory, 'failure.png'), Buffer.from(image.data, 'base64'));
   }

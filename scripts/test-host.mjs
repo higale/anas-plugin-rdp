@@ -74,9 +74,9 @@ module.exports.tools.input = async (params, context) => {
   await main.evaluate(() => gale.config.updateSettings({ language: 'en', theme: 'dark' }));
   await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] }); }, join(pkg, 'PLUGIN.json'));
   await main.evaluate(() => gale.plugins.install());
-  const backend = (method, params) => main.evaluate(({ method, params }) => gale.plugins.invoke('rdp', 'backend.call', { method, params }), { method, params });
+  const backend = (method, params) => main.evaluate(({ method, params }) => gale.plugins.invoke('rdp', 'backend.call', { method, params, concurrent: method.startsWith('server.') }), { method, params });
   phase = 'connect';
-  const profile = await backend('profiles.save', { ...config, name: 'Handoff verification', clipboardSupport: true, passwordAction: 'set', openMode: 'sidebar', runInBackground: true });
+  const profile = await backend('profiles.save', { ...config, name: 'Handoff verification', clipboardSupport: true, passwordAction: 'set', openMode: 'sidebar' });
   await backend('trusts.save', { host: config.host, port: config.port ?? 3389, sha256: pin });
   await backend('profiles.launch', { id: profile.id, revision: profile.revision });
   await main.evaluate(id => gale.plugins.invoke('rdp', 'host.openView', { instanceId: id, location: 'sidebar', title: 'Handoff verification' }), profile.id);
@@ -92,17 +92,35 @@ module.exports.tools.input = async (params, context) => {
       const values = new Set(); for (let i = 0; i < pixels.length; i += 400) values.add(pixels[i] + ',' + pixels[i + 1] + ',' + pixels[i + 2]); return values.size;
     }), { timeout: 15000 }).toBeGreaterThan(4);
   };
+  const cursorProof = async (page, location) => {
+    const cursor = frameIn(page).locator('.remote-cursor-layer img');
+    await expect(cursor).toBeVisible();
+    await expect.poll(() => cursor.evaluate(image => image.naturalWidth)).toBeGreaterThan(0);
+    const clip = await cursor.boundingBox();
+    const visible = await page.screenshot({ clip, path: join(root, `tmp/host-proof/cursor-${location}.png`) });
+    await cursor.evaluate(image => { image.style.opacity = '0'; });
+    const hidden = await page.screenshot({ clip });
+    await cursor.evaluate(image => { image.style.opacity = ''; });
+    assert.notDeepEqual(visible, hidden, 'Cursor must paint over the desktop at its scaled position');
+  };
   await colors(main);
   await app.evaluate(({ app }) => app.focus({ steal: true }));
   await main.bringToFront();
   await expect(frame.locator('#clipboard')).toHaveAttribute('aria-pressed', 'false');
+  // Readiness is exposed by the protocol snapshot; one click must succeed.
+  await expect(frame.locator('#clipboard')).toBeEnabled({ timeout: 10000 });
   await frame.locator('#clipboard').click();
   await expect(frame.locator('#clipboard')).toHaveAttribute('aria-pressed', 'true');
   await expect(frame.locator('#ui-lock')).toHaveAttribute('aria-pressed', 'false');
-  await expect(frame.getByRole('button', {name:'Reset keyboard',exact:true})).toBeEnabled();
-  await frame.getByRole('button', {name:'Reset keyboard',exact:true}).click();
+  await expect(frame.getByRole('button', {name:'Reset input',exact:true})).toBeEnabled();
+  await frame.getByRole('button', {name:'Reset input',exact:true}).click();
+  await frame.locator('canvas').evaluate(canvas => {
+    const bounds = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new PointerEvent('pointermove', { clientX: bounds.x + bounds.width / 2, clientY: bounds.y + bounds.height / 2 }));
+  });
   await frame.locator('#ui-lock').click();
   await expect(frame.locator('#ui-lock')).toHaveAttribute('aria-pressed', 'true');
+  await cursorProof(main, 'sidebar');
   for (const theme of ['light', 'dark']) {
     await main.evaluate(theme => gale.config.updateSettings({ theme }), theme);
     await expect.poll(() => frame.evaluate(() => anas.getInfo().then(info => info.theme))).toBe(theme);
@@ -124,13 +142,14 @@ module.exports.tools.input = async (params, context) => {
     await main.evaluate(id => gale.panels.move(id, 'window'), view.viewId);
     const target = app.context().pages().find(page => page.url().includes('panel-window.html'));
     await colors(target);
+    if (round === 0) await cursorProof(target, 'window');
     await expect(target.getByRole('button', { name: 'Disable clipboard sync', pressed: true })).toBeVisible();
     await expect(target.getByRole('button', { name: 'Local input locked — click to unlock', pressed: true })).toBeVisible();
     const lockButton = target.getByRole('button', { name: 'Local input locked — click to unlock', pressed: true });
     await expect(lockButton.locator('img')).toHaveAttribute('src', /\/_anas\/icon\/assets\/lock.svg$/);
     await expect.poll(() => lockButton.locator('img').evaluate(image => image.naturalWidth)).toBeGreaterThan(0);
-    await expect(target.getByRole('button', {name:'Reset keyboard',exact:true})).toBeEnabled();
-    await target.getByRole('button', {name:'Reset keyboard',exact:true}).click();
+    await expect(target.getByRole('button', {name:'Reset input',exact:true})).toBeEnabled();
+    await target.getByRole('button', {name:'Reset input',exact:true}).click();
     if (round === 0) {
       await target.locator('.panel-window-titlebar').screenshot({ path: join(root, 'tmp/host-proof/lock-window.png') });
       await target.getByRole('button', { name: 'Local input locked — click to unlock' }).click();
@@ -170,6 +189,7 @@ module.exports.tools.input = async (params, context) => {
         });
         assert.equal(position.x, position.expectedX);
         assert.equal(position.y, position.expectedY);
+        await cursorProof(target, `window-${size[0]}`);
       }
       const fitWindow = async () => {
         await target.getByRole('button', { name: 'Fit window to desktop', exact: true }).click();
@@ -194,6 +214,8 @@ module.exports.tools.input = async (params, context) => {
       await expect(target.getByRole('button', { name: 'Local input locked — click to unlock', pressed: true })).toBeEnabled();
     }
     await expect(target.getByRole('button', { name: 'Disconnect', exact: true })).toBeVisible();
+    await target.bringToFront();
+    await target.mouse.move(0, 0); // Re-enter after recreating a window at the same screen position.
     await target.getByRole('button', { name: 'Disconnect', exact: true }).hover();
     await expect(target.getByRole('tooltip')).toHaveText('Disconnect');
     await colors(target);
@@ -208,20 +230,16 @@ module.exports.tools.input = async (params, context) => {
   const lastWindow = app.context().pages().find(page => page.url().includes('panel-window.html'));
   await expect.poll(() => !!frameIn(lastWindow)).toBe(true);
   await colors(lastWindow);
-  await expect.poll(() => backend('profiles.get', { id: profile.id }).then(profile => profile.openMode)).toBe('window');
+  assert.deepEqual(await backend('profiles.get', { id: profile.id }), profile, 'Opening and moving do not modify the profile or its revision.');
   await main.evaluate(id => gale.panels.close(id), view.viewId);
   await new Promise(resolve => setTimeout(resolve, 1000));
   assert.equal((await backend('find', { owner: profile.id })).id, original.id);
-  const remembered = (await backend('runtime.state', {})).sessions.find(session => session.id === original.id);
-  assert.equal(remembered.profile.openMode, 'window');
-  await main.evaluate(({ id, location }) => gale.plugins.invoke('rdp', 'host.openView', { instanceId: id, location, title: 'Handoff verification' }), { id: profile.id, location: remembered.profile.openMode });
-  const restoredWindow = app.context().pages().find(page => page.url().includes('panel-window.html'));
-  await colors(restoredWindow);
-  await expect(restoredWindow.getByRole('button', { name: 'Local input locked — click to unlock', pressed: true })).toBeVisible();
-  assert.equal((await backend('find', { owner: profile.id })).id, original.id);
-  await restoredWindow.evaluate(() => { void panelWindow.moveToSidebar(); });
-  await expect.poll(() => restoredWindow.isClosed()).toBe(true);
+  const backgroundSession = (await backend('runtime.state', {})).sessions.find(session => session.id === original.id);
+  assert.equal(backgroundSession.profile.openMode, 'sidebar');
+  await main.evaluate(({ id, location }) => gale.plugins.invoke('rdp', 'host.openView', { instanceId: id, location, title: 'Handoff verification' }), { id: profile.id, location: backgroundSession.profile.openMode });
   await colors(main);
+  await expect(frameIn(main).getByRole('button', { name: 'Local input locked — click to unlock', pressed: true })).toBeVisible();
+  assert.equal((await backend('find', { owner: profile.id })).id, original.id);
   phase = 'move-after-profile-deletion';
   const activeProfile = (await backend('profiles.list', {})).find(item => item.id === profile.id);
   await assert.rejects(backend('profiles.delete', { id: profile.id, revision: activeProfile.revision }), /RDP_PROFILE_ACTIVE/);
@@ -244,7 +262,6 @@ module.exports.tools.input = async (params, context) => {
   await main.evaluate(id => gale.panels.close(id), reopened.viewId);
   phase = 'foreground-close';
   const foreground = await backend('profiles.save', { ...config, name: 'Foreground close verification', passwordAction: 'set' });
-  assert.equal(foreground.runInBackground, false);
   await backend('profiles.launch', { id: foreground.id, revision: foreground.revision });
   await main.evaluate(id => gale.plugins.invoke('rdp', 'host.openView', { instanceId: id, location: 'sidebar' }), foreground.id);
   await expect.poll(() => !!frameIn(main)).toBe(true);
@@ -255,19 +272,21 @@ module.exports.tools.input = async (params, context) => {
   const foregroundWindow = app.context().pages().find(page => page.url().includes('panel-window.html'));
   await expect.poll(() => !!frameIn(foregroundWindow)).toBe(true);
   await colors(foregroundWindow);
-  assert.equal((await backend('find', { owner: foreground.id })).id, foregroundResource.id, 'Moving an opted-out desktop must preserve its connection.');
+  assert.equal((await backend('find', { owner: foreground.id })).id, foregroundResource.id, 'Moving a desktop must preserve its connection.');
   await (await app.browserWindow(foregroundWindow)).evaluate(window => window.close());
   await expect.poll(() => foregroundWindow.isClosed()).toBe(true);
-  await expect.poll(() => backend('find', { owner: foreground.id })).toBe(null);
+  assert.equal((await backend('find', { owner: foreground.id })).id, foregroundResource.id);
+  await backend('server.close', { profile_id: foreground.id });
   phase = 'model-tools-without-page';
-  const toolSession = await backend('create', { ...config, owner: 'model-tool-test', trustedSha256: pin, runInBackground: true });
+  const toolSession = await backend('create', { ...config, owner: 'model-tool-test', trustedSha256: pin });
   await expect.poll(() => backend('status', { owner: 'model-tool-test', id: toolSession.id }).then(value => value.state), { timeout: 40000 }).toBe('connected');
-  const background = await backend('profiles.save', { ...config, name: 'Model background verification', passwordAction: 'set', runInBackground: true });
+  const background = await backend('profiles.save', { ...config, name: 'Model background verification', passwordAction: 'set' });
   const readInputEvents = async () => (await readFile(inputEventsFile, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
-  await verifyToolCalls(main, toolSession.id, [await backend('profiles.get', { id: foreground.id }), background], backend, readInputEvents);
+  await verifyToolCalls(main, toolSession.id, [await backend('profiles.get', { id: foreground.id }), background], backend, readInputEvents,
+    join(directory, 'data-profile/tmp/anas-plugin-rdp'));
   assert.equal(await backend('find', { owner: 'model-tool-test' }), null, 'The model disconnect tool must terminate the same resource.');
   console.log('RDP model tools passed: no-page queries, native screenshot in model request and ordinary history, explicit disconnect, saved-profile connection reuse across completed turns and subsequent input.');
-  console.log('Host + RDP passed: round-trip moves, background close and same-session resume, deleted-profile handoff, explicit disconnect, and default foreground close ending a live RDP connection.');
+  console.log('Host + RDP passed: round-trip moves, background close and same-session resume, deleted-profile handoff, explicit disconnect, and window close preserving a live RDP connection.');
 } catch (error) {
   let message = String(error?.stack ?? error);
   for (const value of [config.host, config.username, config.password]) if (value) message = message.split(value).join('[redacted]');

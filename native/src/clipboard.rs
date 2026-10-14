@@ -70,7 +70,9 @@ struct Local {
 impl Shared {
     fn update_status(&self) {
         let activity = self.activity.lock().unwrap();
-        let value = if !self.enabled.load(Ordering::SeqCst) {
+        let value = if !self.closed.load(Ordering::SeqCst) && !self.ready.load(Ordering::SeqCst) {
+            "initializing"
+        } else if !self.enabled.load(Ordering::SeqCst) {
             "disabled"
         } else if self.sync_active.load(Ordering::SeqCst) {
             "syncing"
@@ -177,7 +179,7 @@ impl Clipboard {
             publication: AtomicU64::new(0),
             sync_gate: Mutex::new(()),
             remote: Mutex::new(None),
-            status: tokio::sync::watch::channel("disabled").0,
+            status: tokio::sync::watch::channel("initializing").0,
             closed: AtomicBool::new(false),
             #[cfg(windows)]
             streams: AtomicU32::new(1),
@@ -541,6 +543,7 @@ impl CliprdrBackend for Clipboard {
     }
     fn on_ready(&mut self) {
         self.shared.ready.store(true, Ordering::SeqCst);
+        self.shared.update_status();
     }
     fn on_request_format_list(&mut self) {
         self.shared.send(ClipboardMessage::SendInitiateCopy(vec![]));
@@ -783,6 +786,24 @@ mod tests {
             rx,
             receiver,
         )
+    }
+    #[test]
+    fn clipboard_readiness_is_independent_of_the_desktop() {
+        let (mut clipboard, _events, _network) = bridge();
+        clipboard.shared.enabled.store(false, Ordering::SeqCst);
+        clipboard.shared.ready.store(false, Ordering::SeqCst);
+        clipboard.shared.update_status();
+        let status = clipboard.subscribe();
+        assert_eq!(*status.borrow(), "initializing");
+        assert_eq!(
+            clipboard.set_enabled(true).unwrap_err().to_string(),
+            "RDP_CLIPBOARD_UNAVAILABLE"
+        );
+        clipboard.on_ready();
+        assert_eq!(*status.borrow(), "disabled");
+        assert!(!clipboard.shared.enabled.load(Ordering::SeqCst));
+        clipboard.set_enabled(true).unwrap();
+        assert_eq!(*status.borrow(), "syncing");
     }
     #[test]
     fn active_paste_prevents_switching_but_metadata_does_not() {

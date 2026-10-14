@@ -2,11 +2,12 @@
 
 Upstream: https://github.com/Devolutions/IronRDP
 
-Prototype source revision: `2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d`.
+Pinned source revision: `2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d`.
 
 IronRDP is available under MIT OR Apache-2.0. The original license texts
 and copyright notices are retained in this directory. The plugin build includes
-a native RDP session engine linked with IronRDP. The pinned TLS callback patch is documented in native/vendor/ironrdp-tls/ANAS_CHANGES.md in the source.
+a native RDP session engine linked with IronRDP. The pinned TLS callback patch is documented in native/vendor/ironrdp-tls/ANAS_CHANGES.md in the source. The optional in-session display-resize policy is documented in
+native/vendor/ironrdp-client/ANAS_CHANGES.md.
 
 The generated package retains Rust and JavaScript dependency notices in
 `third-party/dependencies/`, with versions and declared licenses in

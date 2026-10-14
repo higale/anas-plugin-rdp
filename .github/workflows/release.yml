@@ -102,6 +102,9 @@ jobs:
       - name: Test native sessions
         working-directory: native
         run: cargo test --locked --workspace
+      - name: Test patched RDP client engine
+        working-directory: native
+        run: cargo test --locked -p ironrdp-client --lib
       - name: Check native code
         working-directory: native
         run: cargo clippy --locked --workspace --all-targets -- -D warnings

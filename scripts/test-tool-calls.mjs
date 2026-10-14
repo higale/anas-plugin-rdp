@@ -1,16 +1,18 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { readFile, realpath } from 'node:fs/promises';
 
 const require = createRequire(resolve('../Anas/package.json'));
 const { expect } = require('playwright/test');
 
 /** Real host/worker/tools, with an isolated local model endpoint. No RDP data leaves the test. */
-export async function verifyToolCalls(page, sessionId, profiles, backend, readInputEvents) {
-  let mode = 'list_profiles', responseCount = 0, imageObserved = false, connectionStep = 0, profile, connectedId, showLocation = 'sidebar', toolLocked = true, cancelInput = false;
+export async function verifyToolCalls(page, sessionId, profiles, backend, readInputEvents, tempDirectory) {
+  let mode = 'list', responseCount = 0, imageObserved = false, connectionStep = 0, profile, connectedId, showLocation = 'sidebar', toolLocked = true, cancelInput = false;
   let backgroundInput = false, backgroundCallId, backgroundObserved = false, backgroundCompleted = false;
-  let stopInput = false;
+  let stopInput = false, serverId = 'model-tool-test', expectReconnect = false;
+  let savedImagePath;
   const errors = [];
   const server = createServer((request, response) => {
     void (async () => {
@@ -20,18 +22,25 @@ export async function verifyToolCalls(page, sessionId, profiles, backend, readIn
       const sequence = ++responseCount;
 
       const result = last.role === 'tool' || (Array.isArray(last.content) && last.content.some(block => block.type === 'image_url'));
-      if (result && mode === 'list_profiles') assert.ok(JSON.stringify(last).includes('hasPassword'), 'Profile tool must return profiles, not an error.');
-      if (result && mode === 'list_sessions') assert.ok(JSON.stringify(last).includes(sessionId), 'Session query must return the original resource.');
+      if (result && mode === 'list') assert.ok(JSON.stringify(last).includes('has_password'), 'Profile tool must return profiles, not an error.');
+      if (result && mode === 'list') assert.ok(JSON.stringify(last).includes(sessionId), 'Session query must return the original resource.');
       if (result && mode === 'screenshot') {
         const block = input.messages.flatMap(message => Array.isArray(message.content) ? message.content : [])
           .find(block => block.type === 'image_url' && block.image_url.url.startsWith('data:image/png;base64,'));
         assert.ok(block, 'The RDP image must reach the ordinary model image projection.');
         const png = Buffer.from(block.image_url.url.split(',')[1], 'base64');
         assert.ok(png.readUInt32BE(16) > 0 && png.readUInt32BE(20) > 0);
+        const metadata = input.messages.flatMap(message => typeof message.content === 'string' ? [message.content]
+          : Array.isArray(message.content) ? message.content.filter(block => block.type === 'text').map(block => block.text) : [])
+          .map(text => { try { return JSON.parse(text); } catch { return null; } }).find(value => value?.saved_path);
+        assert.ok(metadata?.saved_path, 'A successful save must reach the model as ordinary text metadata.');
+        assert.equal(dirname(metadata.saved_path), await realpath(join(tempDirectory, 'screenshots')));
+        assert.deepEqual(await readFile(metadata.saved_path), png, 'Saved file and model image must contain the same PNG.');
+        savedImagePath = metadata.saved_path.replaceAll('\\', '/');
         imageObserved = true;
       }
-      if (result && mode === 'set_ui_locked') assert.deepEqual(JSON.parse(last.content), { session_id: sessionId, ui_locked: toolLocked });
-      if (result && mode === 'reset_keyboard') { const data = JSON.parse(last.content); assert.equal(data.accepted, true); assert.equal(data.toggle_flags, 0); }
+      if (result && mode === 'lock_ui') { const data = JSON.parse(last.content); assert.equal(data.ok, true); assert.equal(data.session_id, sessionId); assert.equal(data.ui_locked, toolLocked); }
+      if (result && mode === 'reset_input') { const data = JSON.parse(last.content); assert.equal(data.applied.reset_input.accepted, true); assert.equal(data.applied.reset_input.toggle_flags, 0); }
       if (result && mode === 'input' && !stopInput) {
         const data = JSON.parse(last.content);
         if (backgroundInput) {
@@ -46,38 +55,40 @@ export async function verifyToolCalls(page, sessionId, profiles, backend, readIn
           }
         } else assert.equal(data.accepted, true);
       }
-      if (result && mode === 'show_desktop') {
+      if (result && mode === 'foreground') {
         const data = JSON.parse(last.content);
-        assert.equal(data.id, sessionId);
+        if (expectReconnect) { assert.notEqual(data.session_id, sessionId); sessionId = connectedId = data.session_id; expectReconnect = false; }
+        else assert.equal(data.session_id, sessionId);
+        assert.equal(data.connection_state, 'connected');
         assert.equal(data.view.location, showLocation);
       }
-      if (result && mode === 'connect') {
+      if (result && mode === 'background') {
         const data = JSON.parse(last.content);
         assert.equal(data.ui_locked, false, 'A new connection starts unlocked.');
-        assert.equal(data.state, 'connected', 'Connection must report a real authenticated session.');
+        assert.equal(data.connection_state, 'connected', 'Connection must report a real authenticated session.');
         assert.equal(data.view, null, 'A successful connection does not imply a visible desktop.');
         assert.equal(data.reused, connectionStep > 0);
-        if (connectionStep === 0) connectedId = data.id;
-        else assert.equal(data.id, connectedId, 'A second connect must reuse the same session.');
+        if (connectionStep === 0) connectedId = data.session_id;
+        else assert.equal(data.session_id, connectedId, 'A second connect must reuse the same session.');
         connectionStep++;
       }
-      const again = !result || (mode === 'connect' && connectionStep < 2) || (backgroundInput && !backgroundCompleted);
-      const name = input.tools.find(tool => tool.function.name === (backgroundCallId ? 'wait_call' : `plugin__rdp__${mode}`))?.function.name;
+      const again = !result || (mode === 'background' && connectionStep < 2) || (backgroundInput && !backgroundCompleted);
+      const name = input.tools.find(tool => tool.function.name === (backgroundCallId ? 'wait_call' : `plugin__rdp__${['foreground','background','closed','lock_ui','reset_input'].includes(mode) ? 'control' : mode}`))?.function.name;
       assert.ok(name, 'The selected RDP tool must reach the model.');
       const args = backgroundCallId ? { summary: 'Wait for the original RDP input', call_id: backgroundCallId, timeout: 30 }
-        : backgroundInput || stopInput ? { session_id: sessionId, interval_ms: 1000, actions: Array.from({length:12}, (_, n) => ({type:'move',x:45+n,y:45})) }
-        : mode === 'connect' ? { profile_id: profile.id, revision: profile.revision }
-        : mode === 'set_ui_locked' ? { session_id: sessionId, locked: toolLocked }
+        : backgroundInput || stopInput ? { profile_id: serverId, interval_ms: 1000, actions: Array.from({length:12}, (_, n) => ({type:'move',x:45+n,y:45})) }
+        : mode === 'background' ? { profile_id: profile.id, state: 'background' }
+        : mode === 'lock_ui' ? { profile_id: serverId, ui_locked: toolLocked }
         : mode === 'input' ? cancelInput
-          ? { session_id: sessionId, interval_ms: 1000, actions: Array.from({length:5}, (_, n) => ({type:'move',x:45+n,y:45})) }
-          : { session_id: sessionId, actions: [{type:'move',x:45,y:45},{type:'key',code:42,down:true}] }
-        : mode === 'show_desktop' ? { session_id: sessionId, location: showLocation }
-        : ['screenshot', 'disconnect', 'reset_keyboard'].includes(mode) ? { session_id: sessionId } : {};
+          ? { profile_id: serverId, interval_ms: 1000, actions: Array.from({length:5}, (_, n) => ({type:'move',x:45+n,y:45})) }
+          : { profile_id: serverId, actions: [{type:'move',x:45,y:45},{type:'key',code:42,down:true}] }
+        : mode === 'foreground' ? { profile_id: serverId, state: 'foreground', location: showLocation }
+        : mode === 'closed' ? { profile_id: serverId, state: 'closed' } : mode === 'reset_input' ? { profile_id: serverId, reset_input: true } : mode === 'screenshot' ? { profile_id: serverId, save: true } : {};
       const calls = again ? [{ id: `rdp-${sequence}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] : undefined;
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ id: `response-${sequence}`, object: 'chat.completion', created: 1, model: input.model,
         choices: [{ index: 0, finish_reason: calls ? 'tool_calls' : 'stop', message: { role: 'assistant',
-          content: calls ? null : `RDP_${mode}_${mode === 'connect' ? profile.runInBackground : ''}_FINISHED`, ...(calls ? { tool_calls: calls } : {}) } }],
+          content: calls ? null : `RDP_${mode}_${mode === 'background' ? profile.id : ''}_FINISHED${mode === 'screenshot' ? `\n\n![Saved remote desktop](<${savedImagePath}>)` : ''}`, ...(calls ? { tool_calls: calls } : {}) } }],
         usage: { prompt_tokens: 50, completion_tokens: 20, total_tokens: 70 } }));
     })().catch(() => { errors.push('Local model verification failed.'); response.writeHead(500); response.end(); });
   });
@@ -96,7 +107,7 @@ export async function verifyToolCalls(page, sessionId, profiles, backend, readIn
           applicationEnvironment: false, skills: { mode: 'off', project: false, entries: [] }, subagents: { mode: 'off', names: [] },
           mcp: { defaultMode: 'selected', servers: [] }, customTools: { mode: 'off', project: false, entries: [] },
           backgroundTools: true, pluginMode: 'custom', plugins: [{ id: 'rdp', mode: 'custom' }], pluginPrompts: [],
-          pluginTools: ['connect', 'list_profiles', 'list_sessions', 'screenshot', 'input', 'reset_keyboard', 'set_ui_locked', 'show_desktop', 'disconnect'].map(id => `rdp:tool:${id}`) } });
+          pluginTools: ['control', 'list', 'profile', 'screenshot', 'input'].map(id => `rdp:tool:${id}`) } });
       if (project.status !== 'ok') throw new Error(JSON.stringify(project));
       await gale.agent.workspace.set({ mode: 'new_thread', projectId: project.value.id, modelParameterPresetId: null });
     }, server.address().port);
@@ -104,10 +115,15 @@ export async function verifyToolCalls(page, sessionId, profiles, backend, readIn
     await page.reload();
     await page.locator('[data-agent-composer-input]').waitFor({ timeout: 45000 });
     assert.equal(await page.locator('iframe').count(), 0);
-    for (mode of ['list_profiles', 'list_sessions', 'set_ui_locked', 'screenshot', 'input', 'reset_keyboard']) {
+    for (mode of ['list', 'lock_ui', 'screenshot', 'input', 'reset_input']) {
       await page.locator('[data-agent-composer-input]').fill(`Verify RDP tool ${mode}.`);
       await page.getByRole('button', { name: 'Send', exact: true }).click();
-      await expect(page.getByText(`RDP_${mode}_${mode === 'connect' ? profile.runInBackground : ''}_FINISHED`, { exact: true })).toBeVisible({ timeout: 35000 });
+      await expect(page.getByText(`RDP_${mode}_${mode === 'background' ? profile.id : ''}_FINISHED`, { exact: true })).toBeVisible({ timeout: 35000 });
+      if (mode === 'screenshot') {
+        const savedImage = page.getByRole('img', { name: 'Saved remote desktop', exact: true });
+        await expect(savedImage).toBeVisible();
+        await expect.poll(() => savedImage.evaluate(image => image.complete && image.naturalWidth > 0)).toBe(true);
+      }
       assert.equal(await page.locator('iframe').count(), 0);
     }
     mode = 'input'; cancelInput = true;
@@ -140,12 +156,12 @@ export async function verifyToolCalls(page, sessionId, profiles, backend, readIn
     assert.deepEqual(longEvents.map(event => event.event), ['started', 'completed'], 'Background waiting must not replay or cancel input.');
     assert.ok(longEvents[1].at - longEvents[0].at >= 11000);
     backgroundInput = false; backgroundCallId = undefined;
-    mode = 'show_desktop';
+    mode = 'foreground';
     let panelId, shown = 0;
     for (showLocation of ['sidebar', 'window', 'window', 'sidebar']) {
       await page.locator('[data-agent-composer-input]').fill('Show the same desktop in ' + showLocation);
       await page.getByRole('button', { name: 'Send', exact: true }).click();
-      await expect(page.getByText('RDP_show_desktop__FINISHED', { exact: true })).toHaveCount(++shown, { timeout: 45000 });
+      await expect(page.getByText('RDP_foreground__FINISHED', { exact: true })).toHaveCount(++shown, { timeout: 45000 });
       const views = await page.evaluate(() => gale.panels.list());
       const desktops = views.filter(view => view.content.kind === 'plugin' && view.content.pluginId === 'rdp');
       assert.equal(desktops.length, 1);
@@ -156,20 +172,21 @@ export async function verifyToolCalls(page, sessionId, profiles, backend, readIn
       assert.equal((await backend('find', { owner: 'model-tool-test' })).id, sessionId);
     }
     await page.evaluate(id => gale.panels.close(id), panelId);
-    mode = 'set_ui_locked'; toolLocked = false;
+    mode = 'lock_ui'; toolLocked = false;
     await page.locator('[data-agent-composer-input]').fill('Unlock local input for the existing session.');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect(page.getByText('RDP_set_ui_locked__FINISHED', { exact: true })).toHaveCount(2, { timeout: 35000 });
-    mode = 'disconnect';
+    await expect(page.getByText('RDP_lock_ui__FINISHED', { exact: true })).toHaveCount(2, { timeout: 35000 });
+    mode = 'closed';
     await page.locator('[data-agent-composer-input]').fill('Disconnect the test session.');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect(page.getByText('RDP_disconnect__FINISHED', { exact: true })).toBeVisible({ timeout: 35000 });
-    mode = 'connect';
+    await expect(page.getByText('RDP_closed__FINISHED', { exact: true })).toBeVisible({ timeout: 35000 });
+    mode = 'background';
     for (profile of profiles) {
-      mode = 'connect'; connectionStep = 0;
+      serverId = profile.id;
+      mode = 'background'; connectionStep = 0;
       await page.locator('[data-agent-composer-input]').fill('Connect to the saved server and reuse its connection.');
       await page.getByRole('button', { name: 'Send', exact: true }).click();
-      await expect(page.getByText(`RDP_connect_${profile.runInBackground}_FINISHED`, { exact: true })).toBeVisible({ timeout: 50000 });
+      await expect(page.getByText(`RDP_background_${profile.id}_FINISHED`, { exact: true })).toBeVisible({ timeout: 50000 });
       assert.equal(await page.locator('iframe').count(), 0);
       assert.equal((await backend('find', { owner: profile.id })).id, connectedId, 'Completing a conversation turn must leave the connection intact.');
       mode = 'input'; sessionId = connectedId;
@@ -179,7 +196,30 @@ export async function verifyToolCalls(page, sessionId, profiles, backend, readIn
       await expect(page.getByText('RDP_input__FINISHED', { exact: true })).toHaveCount(completedInputs + 1, { timeout: 35000 });
       assert.equal((await backend('find', { owner: profile.id })).id, connectedId);
       if (profile !== profiles.at(-1)) {
-        await backend('disconnect', { owner: profile.id, id: connectedId });
+        serverId = profile.id; showLocation = 'window';
+        const run = async next => {
+          mode = next;
+          const label = `RDP_${mode}_${mode === 'background' ? profile.id : ''}_FINISHED`;
+          const before = await page.getByText(label, { exact: true }).count();
+          await page.locator('[data-agent-composer-input]').fill('Set server state to ' + mode);
+          await page.getByRole('button', { name: 'Send', exact: true }).click();
+          await expect(page.getByText(label, { exact: true })).toHaveCount(before + 1, { timeout: 45000 });
+        };
+        await run('foreground');
+        const desktopId = (await page.evaluate(() => gale.panels.list())).find(view => view.content.instanceId === serverId).viewId;
+        await expect.poll(() => backend('lease', { owner: serverId, id: sessionId }).then(lease => !!lease.owner), { timeout: 15000 }).toBe(true);
+        await backend('disconnect', { owner: serverId, id: sessionId });
+        expectReconnect = true;
+        await run('foreground');
+        assert.equal((await page.evaluate(() => gale.panels.list())).find(view => view.content.instanceId === serverId).viewId, desktopId);
+        await expect.poll(() => backend('lease', { owner: serverId, id: sessionId }).then(lease => !!lease.owner), { timeout: 15000 }).toBe(true);
+        await run('background');
+        assert.equal((await page.evaluate(() => gale.panels.list())).some(view => view.content.instanceId === serverId), false);
+        assert.equal((await backend('find', { owner: serverId })).id, sessionId);
+        await run('foreground');
+        await backend('disconnect', { owner: serverId, id: sessionId });
+        await run('closed');
+        assert.equal((await page.evaluate(() => gale.panels.list())).some(view => view.content.instanceId === serverId), false);
       } else {
         stopInput = true;
         const beforeStop = (await readInputEvents()).length;

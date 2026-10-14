@@ -1,4 +1,4 @@
-export type MenuItem = { label: string; disabled?: boolean; danger?: boolean; action(): void } | 'separator';
+export type MenuItem = { label: string; disabled?: boolean; danger?: boolean; checked?: boolean; checkType?: 'radio' | 'checkbox'; action(): void } | 'separator';
 let active: { menu: HTMLDivElement; trigger: HTMLElement; events: AbortController } | undefined;
 
 export function closeContextMenu(restoreFocus = false) {
@@ -20,7 +20,8 @@ export function openContextMenu(trigger: HTMLElement, point: { x: number; y: num
       continue;
     }
     const button = document.createElement('button');
-    button.type = 'button'; button.tabIndex = -1; button.setAttribute('role', 'menuitem');
+    button.type = 'button'; button.tabIndex = -1; button.setAttribute('role', item.checked === undefined ? 'menuitem' : item.checkType === 'checkbox' ? 'menuitemcheckbox' : 'menuitemradio');
+    if (item.checked !== undefined) button.setAttribute('aria-checked', String(item.checked));
     button.textContent = item.label; button.disabled = item.disabled ?? false;
     if (item.danger) button.className = 'danger';
     button.addEventListener('click', () => { closeContextMenu(true); item.action(); });

@@ -11,7 +11,7 @@ pub struct Capture {
     pub cursor_drawn: bool,
 }
 
-fn cursor_pixels(cursor: &Value) -> anyhow::Result<(u32, u32, i64, i64, Vec<u8>)> {
+pub(crate) fn cursor_pixels(cursor: &Value) -> anyhow::Result<(u32, u32, i64, i64, Vec<u8>)> {
     if cursor["kind"] == "default" {
         // A deterministic arrow, independent of the local operating system.
         let rows = [

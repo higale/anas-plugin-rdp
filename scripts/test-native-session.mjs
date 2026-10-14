@@ -31,12 +31,22 @@ assert.ok(pin, 'A previously verified certificate is required.');
 await mkdir(resolve(root, 'tmp/native-proof'), { recursive: true });
 await build({ entryPoints: [resolve(root, 'src/ui/desktop.ts')], bundle: true, format: 'esm', platform: 'browser',
   outfile: resolve(root, 'tmp/native-proof/desktop.js') });
-const html = `<!doctype html><html><body style="margin:0;background:#222;display:flex;align-items:center;justify-content:center;height:100vh"><script type="module">
+const html = `<!doctype html><html><head><link rel="stylesheet" href="/style.css"></head><body style="margin:0;background:#222;display:flex;align-items:center;justify-content:center;height:100vh"><script type="module">
 import { Desktop } from '/desktop.js';
 let desktop;
 window.proof = {
   async attach(connection) { desktop = new Desktop(document.body, connection, (value, locked) => { window.displayState = value; window.uiLocked = locked; }); await desktop.ready; },
   localState() { return { locked: desktop.uiLocked, revision: desktop.uiRevision }; },
+  cursor() { return { position: desktop.cursorPosition, visible: !document.querySelector('.remote-cursor-layer').hidden,
+    loaded: document.querySelector('.remote-cursor-layer img').naturalWidth > 0 }; },
+  observeCursor() {
+    window.cursorSamples = [];
+    const observer = new MutationObserver(() => {
+      window.cursorSamples.push({ target: desktop.cursorPosition, drawn: desktop.displayedCursorPosition });
+    });
+    observer.observe(document.querySelector('.remote-cursor-layer img'), { attributes: true, attributeFilter: ['style'] });
+    window.stopCursorObservation = () => observer.disconnect();
+  },
   raw(message, revision) { desktop.socket.send(JSON.stringify({ ...message, epoch: desktop.epoch, uiRevision: revision ?? desktop.uiRevision })); },
   release() { desktop.release(); },
   dispose() { desktop.dispose(); },
@@ -45,6 +55,7 @@ window.proof = {
 </script></body></html>`;
 const server = createServer(async (request, response) => {
   if (request.url === '/desktop.js') { response.setHeader('Content-Type', 'text/javascript'); response.end(await readFile(resolve(root, 'tmp/native-proof/desktop.js'))); }
+  else if (request.url === '/style.css') { response.setHeader('Content-Type', 'text/css'); response.end(await readFile(resolve(root, 'src/ui/style.css'))); }
   else { response.setHeader('Content-Type', 'text/html'); response.end(html); }
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -146,6 +157,21 @@ try {
   assert.equal(inputResult.accepted, true);
   assert.deepEqual(await command('lease', {}), lease, 'Tool input must not change the active display page.');
   assert.equal((await command('input', { actions: [{type:'move',x:51,y:51}] })).accepted, true);
+  await page.waitForFunction(() => window.proof.cursor().visible && window.proof.cursor().loaded && window.proof.cursor().position?.x === 51);
+  await command('setUiLocked', { locked: true });
+  await page.waitForFunction(() => window.uiLocked === true);
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].show());
+  await page.evaluate(() => window.proof.observeCursor());
+  await command('input', { actions: [{type:'move',x:200,y:180}] });
+  await page.waitForFunction(() => window.cursorSamples.some(sample => sample.drawn?.x === 200));
+  const samples = await page.evaluate(() => { window.stopCursorObservation(); return window.cursorSamples; });
+  assert.ok(samples.some(sample => sample.target?.x === 200 && sample.drawn?.x > 51 && sample.drawn.x < 200), 'Actual target is accepted while only the drawn cursor interpolates');
+  assert.equal((await capture(false)).meta.cursor_position.x, 200, 'Screenshot metadata remains at the actual coordinate');
+  const cursorImage = page.locator('.remote-cursor-layer img');
+  const bitmap = await cursorImage.getAttribute('src');
+  await writeFile(resolve(root, 'tmp/native-proof/cursor-bitmap.png'), Buffer.from(bitmap.split(',')[1], 'base64'));
+  await command('setUiLocked', { locked: false });
+  await page.waitForFunction(() => window.uiLocked === false);
   await page.waitForTimeout(250);
   const beforeUser = (await capture(false)).meta.input_revision;
   // A user can immediately enter input after a tool call, without a takeover click.
@@ -178,6 +204,7 @@ try {
   await page.waitForTimeout(150);
   assert.equal((await capture(false)).meta.input_revision, beforeLocked, 'Locked UI input must not reach RDP.');
   assert.equal((await command('input', { actions: [{type:'move',x:53,y:53}] })).accepted, true);
+  await page.waitForFunction(() => window.proof.cursor().visible && window.proof.cursor().position?.x === 53);
   assert.equal((await capture(false)).meta.ui_locked, true);
   await command('setUiLocked', { locked: false });
   await page.waitForFunction(() => window.uiLocked === false);
@@ -202,6 +229,7 @@ try {
     await target.waitForFunction(() => !!window.proof);
     await target.evaluate(value => window.proof.attach(value), connection(nextOwner));
     await target.waitForFunction(() => window.uiLocked === true);
+    await target.waitForFunction(() => window.proof.cursor().visible && window.proof.cursor().position?.x === 53);
     colors.push(await target.evaluate(() => window.proof.colors()));
     lease = await command('claim', { page: nextOwner, expected: owner, expectedEpoch: lease.epoch });
     await assert.rejects(command('claim', { page: owner, expected: owner, expectedEpoch: lease.epoch - 1 }), /OWNERSHIP_CHANGED/);
@@ -218,6 +246,11 @@ try {
   assert.ok(afterInput.meta.input_revision > initialShot.meta.input_revision);
   assert.ok(afterInput.meta.cursor_position);
   assert.ok(afterInput.meta.cursor_revision > 0);
+  await page.waitForFunction(position => JSON.stringify(window.proof.cursor().position) === JSON.stringify(position), afterInput.meta.cursor_position);
+  // Leaving the canvas sends no artificial move or hide operation.
+  const resting = await page.evaluate(() => { document.querySelector('canvas').dispatchEvent(new PointerEvent('pointerleave')); return window.proof.cursor().position; });
+  await page.waitForTimeout(100);
+  assert.deepEqual(await page.evaluate(() => window.proof.cursor().position), resting);
   lease = await command('release', { expected: owner, expectedEpoch: lease.epoch });
   await page.evaluate(() => window.proof.dispose());
   await new Promise(resolve => setTimeout(resolve, 1500));
@@ -234,7 +267,7 @@ try {
   assert.equal(events.includes('closed'), false);
   assert.equal(colors.every(value => value > 20), true, `Every attached display must show the desktop: ${colors.join(', ')}`);
   result = { passed: true, authenticated_connections: 1, rebuilt_pages: 5, sampled_colors: colors, stale_claim_rejected: true,
-    no_page_interval_ms: 1500, no_page_screenshots: 2, screenshot_dimensions: decoded.size, screenshot_colors: decoded.colors, input_metadata_verified: true, independent_tool_and_page_input_verified: true, local_input_lock_verified: true, events };
+    no_page_interval_ms: 1500, no_page_screenshots: 2, screenshot_dimensions: decoded.size, screenshot_colors: decoded.colors, input_metadata_verified: true, independent_tool_and_page_input_verified: true, local_input_lock_verified: true, remote_cursor_verified: true, events };
   helper.stdin.end();
   await closed;
   console.log('Native RDP: one authentication, four cross-window replacements, two no-page screenshots, one reattachment, independent tool/page input and stale page claims verified.');

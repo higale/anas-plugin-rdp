@@ -61,6 +61,7 @@ enum Button {
 pub struct Batch {
     pub events: Events,
     pub position: Option<(u16, u16)>,
+    pub animate_cursor: bool,
     steps: Vec<Step>,
 }
 pub fn key(code: u8, extended: bool, down: bool) -> FastPathInputEvent {
@@ -255,9 +256,11 @@ pub fn batch(value: &Value, width: u32, height: u32) -> anyhow::Result<Batch> {
         push_step(&mut events, &mut steps, [mouse(x, y, bits, wheel)], None);
     }
     let position = mouse_position(&events);
+    let animate_cursor = ends_with_mouse_move(&events);
     Ok(Batch {
         events,
         position,
+        animate_cursor,
         steps,
     })
 }
@@ -266,6 +269,17 @@ fn mouse_position(events: &[FastPathInputEvent]) -> Option<(u16, u16)> {
         FastPathInputEvent::MouseEvent(mouse) => Some((mouse.x_position, mouse.y_position)),
         _ => None,
     })
+}
+// Presentation hint only; this never inserts or delays an input event.
+fn ends_with_mouse_move(events: &[FastPathInputEvent]) -> bool {
+    events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            FastPathInputEvent::MouseEvent(mouse) => Some(mouse.flags == PointerFlags::MOVE),
+            _ => None,
+        })
+        .unwrap_or(false)
 }
 
 impl Batch {
@@ -295,6 +309,7 @@ pub struct TimedInput {
     pub next_at: Instant,
     pub deadline: Instant,
     step_position: Option<(u16, u16)>,
+    step_animate_cursor: bool,
 }
 impl TimedInput {
     pub fn new(batch: Batch, interval: Duration, now: Instant, deadline: Instant) -> Self {
@@ -305,6 +320,7 @@ impl TimedInput {
             next_at: now,
             deadline,
             step_position: None,
+            step_animate_cursor: false,
         }
     }
     pub fn advance(&mut self, input: &RdpInputSender, now: Instant) -> anyhow::Result<bool> {
@@ -330,6 +346,7 @@ impl TimedInput {
                 .map_err(|_| anyhow::anyhow!("RDP_INPUT_UNAVAILABLE"))?;
         }
         self.step_position = mouse_position(&events);
+        self.step_animate_cursor = ends_with_mouse_move(&events);
         self.next += 1;
         // Schedule from the actual send time: a delayed tick must never burst old steps together.
         if let Some(step) = self.batch.steps.get(self.next) {
@@ -339,6 +356,9 @@ impl TimedInput {
     }
     pub fn position(&self) -> Option<(u16, u16)> {
         self.step_position
+    }
+    pub fn animate_cursor(&self) -> bool {
+        self.step_animate_cursor
     }
 }
 #[cfg(test)]
@@ -350,6 +370,52 @@ mod tests {
             panic!("unexpected input")
         };
         events
+    }
+    #[test]
+    fn cursor_animation_hint_preserves_exact_mouse_events_and_action_timing() {
+        let moves = batch(&json!([{"type":"move","x":40,"y":50}]), 100, 80).unwrap();
+        assert!(moves.animate_cursor);
+        assert_eq!(moves.duration(Duration::from_millis(50)), Duration::ZERO);
+        assert_eq!(&moves.events[..], &[mouse(40, 50, 0x0800, 0)]);
+        let click = batch(
+            &json!([
+                {"type":"move","x":40,"y":50},
+                {"type":"button","x":40,"y":50,"button":"left","down":true},
+                {"type":"button","x":40,"y":50,"button":"left","down":false}
+            ]),
+            100,
+            80,
+        )
+        .unwrap();
+        assert!(!click.animate_cursor);
+        let interval = Duration::from_millis(50);
+        assert_eq!(click.duration(interval), Duration::from_millis(100));
+        let now = Instant::now();
+        let mut timed = TimedInput::new(click, interval, now, now + Duration::from_secs(1));
+        let (sender, mut receiver) = RdpInputSender::channel(4);
+        for (step, flags) in [0x0800, 0x9000, 0x1000].into_iter().enumerate() {
+            assert_eq!(
+                timed
+                    .advance(&sender, now + interval * step as u32)
+                    .unwrap(),
+                step == 2
+            );
+            assert_eq!(timed.position(), Some((40, 50)));
+            assert_eq!(timed.animate_cursor(), step == 0);
+            assert_eq!(&queued(&mut receiver)[..], &[mouse(40, 50, flags, 0)]);
+            assert!(
+                receiver.try_recv().is_err(),
+                "Animation must never send intermediate mouse events"
+            );
+        }
+        let wheel = batch(
+            &json!([{"type":"wheel","x":40,"y":50,"delta":-120}]),
+            100,
+            80,
+        )
+        .unwrap();
+        assert!(!wheel.animate_cursor);
+        assert_eq!(&wheel.events[..], &[mouse(40, 50, 0x0200, -120)]);
     }
     #[test]
     fn page_keys_accept_documented_names_and_emit_extended_presses_and_chords() {

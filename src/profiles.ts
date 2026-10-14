@@ -5,7 +5,7 @@ import type { Profile, Target, Trust } from './profile-types';
 import { resolution } from './resolution';
 
 type Cipher = { version: number; iv: string; ciphertext: string; tag: string };
-type StoredProfile = Target & { id: string; revision: number; name: string; open_mode: Profile['openMode']; run_in_background: boolean; clipboard_support: boolean; desktop_width: number; desktop_height: number; password?: Cipher };
+type StoredProfile = Target & { id: string; revision: number; name: string; open_mode: Profile['openMode']; clipboard_support: boolean; adaptive_window: boolean; adaptive_sidebar: boolean; disable_mouse_animation: boolean; desktop_width: number; desktop_height: number; password?: Cipher };
 type State = { version: number; profiles: StoredProfile[]; certificate_trust: Trust[] };
 // Portable obfuscation by product choice, not a vault. Keep this versioned key
 // for existing backups. Anyone with this code and the file can decrypt it.
@@ -55,8 +55,8 @@ function decrypt(profile: StoredProfile): string | null {
   } catch { return fail('PASSWORD_UNREADABLE'); }
 }
 function publicProfile(profile: StoredProfile): Profile {
-  const { password, open_mode, run_in_background, clipboard_support, desktop_width, desktop_height, ...rest } = profile;
-  return { ...rest, desktopWidth: desktop_width, desktopHeight: desktop_height, openMode: open_mode, runInBackground: run_in_background, clipboardSupport: clipboard_support, hasPassword: password !== undefined };
+  const { password, adaptive_window, adaptive_sidebar, open_mode, clipboard_support, disable_mouse_animation, desktop_width, desktop_height, ...rest } = profile;
+  return { ...rest, adaptiveWindow: adaptive_window, adaptiveSidebar: adaptive_sidebar, desktopWidth: desktop_width, desktopHeight: desktop_height, openMode: open_mode, clipboardSupport: clipboard_support, disableMouseAnimation: disable_mouse_animation, hasPassword: password !== undefined };
 }
 function storedResolution(width: unknown, height: unknown) {
   const { desktopWidth, desktopHeight } = resolution(width, height);
@@ -101,7 +101,7 @@ export class Profiles {
       const state: State = { version: 0, profiles: [], certificate_trust: Array.isArray(values.certificate_trust) ? values.certificate_trust.filter(validTrust) : [] };
       if (values.connection) {
         const current = target(object(values.connection));
-        state.profiles.push({ ...current, ...storedResolution(undefined, undefined), id: randomUUID(), revision: 1, name: current.host, open_mode: 'sidebar', run_in_background: false, clipboard_support: false });
+        state.profiles.push({ ...current, ...storedResolution(undefined, undefined), id: randomUUID(), revision: 1, name: current.host, open_mode: 'sidebar', clipboard_support: false, adaptive_window: false, adaptive_sidebar: false, disable_mouse_animation: false });
       }
       await this.write(state, signal);
       return state;
@@ -119,7 +119,7 @@ export class Profiles {
         const name = string(row.name, 120).trim();
         if (!name) return fail();
         if (row.password !== undefined) object(row.password);
-        return { ...target(row), ...storedResolution(row.desktop_width, row.desktop_height), id, revision: Number(row.revision), name, open_mode: mode(row.open_mode), run_in_background: optionalFlag(row.run_in_background), clipboard_support: optionalFlag(row.clipboard_support), ...(row.password === undefined ? {} : { password: row.password as Cipher }) };
+        return { ...target(row), ...storedResolution(row.desktop_width, row.desktop_height), id, revision: Number(row.revision), name, open_mode: mode(row.open_mode), clipboard_support: optionalFlag(row.clipboard_support), adaptive_window: optionalFlag(row.adaptive_window), adaptive_sidebar: optionalFlag(row.adaptive_sidebar), disable_mouse_animation: optionalFlag(row.disable_mouse_animation), ...(row.password === undefined ? {} : { password: row.password as Cipher }) };
       });
       const trusts = state.certificate_trust ?? [];
       if (!Array.isArray(trusts) || !trusts.every(validTrust)) return fail();
@@ -168,20 +168,20 @@ export class Profiles {
       return state.certificate_trust;
     }
     const previous = input.id === undefined ? undefined : state.profiles.find(item => item.id === input.id);
-    if (method === 'profiles.setOpenMode') {
-      const openMode = mode(input.openMode);
-      if (!previous) return null;
-      if (previous.open_mode === openMode) return publicProfile(previous);
-      const next = { ...previous, open_mode: openMode, revision: previous.revision + 1 };
-      state.profiles[state.profiles.indexOf(previous)] = next;
-      await this.write(state, signal);
-      const launch = this.launches.get(previous.id);
-      if (launch?.revision === previous.revision) launch.revision = next.revision;
-      return publicProfile(next);
-    }
     if (input.id !== undefined && !previous) return fail('PROFILE_MISSING');
     if (method === 'profiles.get') {
       if (!previous) return fail('PROFILE_MISSING');
+      return publicProfile(previous);
+    }
+    if (method === 'preferences.adaptive') {
+      if (!previous) return fail('PROFILE_MISSING');
+      if (Object.keys(input).some(key => !['id', 'location', 'enabled'].includes(key))
+        || (input.location !== 'window' && input.location !== 'sidebar') || typeof input.enabled !== 'boolean') return fail();
+      const key = input.location === 'window' ? 'adaptive_window' : 'adaptive_sidebar';
+      if (previous[key] !== input.enabled) {
+        previous[key] = input.enabled; previous.revision++;
+        await this.write(state, signal);
+      }
       return publicProfile(previous);
     }
     if (previous && input.revision !== previous.revision) return fail('PROFILE_CONFLICT');
@@ -234,14 +234,14 @@ export class Profiles {
     } else {
       const name = string(input.name, 120).trim();
       if (!name) return fail();
-      next = { ...target(input), ...storedResolution(input.desktopWidth, input.desktopHeight), id: previous?.id ?? randomUUID(), revision: (previous?.revision ?? 0) + 1, name, open_mode: mode(input.openMode), run_in_background: optionalFlag(input.runInBackground), clipboard_support: optionalFlag(input.clipboardSupport) };
+      next = { ...target(input), ...storedResolution(input.desktopWidth, input.desktopHeight), id: previous?.id ?? randomUUID(), revision: (previous?.revision ?? 0) + 1, name, open_mode: mode(input.openMode), clipboard_support: optionalFlag(input.clipboardSupport), adaptive_window: optionalFlag(input.adaptiveWindow), adaptive_sidebar: optionalFlag(input.adaptiveSidebar), disable_mouse_animation: optionalFlag(input.disableMouseAnimation) };
       switch (input.passwordAction) {
         case 'keep': if (previous?.password) next.password = previous.password; break;
         case 'set': next.password = encrypt(next.id, string(input.password, 4096)); break;
         case 'remove': break;
         default: return fail();
       }
-      if (previous && ['host', 'port', 'username', 'domain', 'name', 'open_mode', 'run_in_background', 'clipboard_support', 'desktop_width', 'desktop_height'].every(key => previous[key as keyof StoredProfile] === next[key as keyof StoredProfile])
+      if (previous && ['host', 'port', 'username', 'domain', 'name', 'open_mode', 'clipboard_support', 'adaptive_window', 'adaptive_sidebar', 'disable_mouse_animation', 'desktop_width', 'desktop_height'].every(key => previous[key as keyof StoredProfile] === next[key as keyof StoredProfile])
         && JSON.stringify(previous.password) === JSON.stringify(next.password)) return publicProfile(previous);
     }
     if (previous && method === 'profiles.save') state.profiles[state.profiles.indexOf(previous)] = next;

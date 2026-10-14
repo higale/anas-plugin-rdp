@@ -36,22 +36,25 @@
     "trust": "证书信任保存失败，请重试。",
     "load": "组件加载失败，请重新打开插件。",
     "language": "部分语言文件无法加载，请在 Anas 设置 → 插件中查看详情。",
-    "open_profiles": "无法打开服务器列表，请重试。",
     "conflict_editor": "配置已变更，重新加载将放弃未保存的修改。",
     "active": "服务器尚未停止，请先断开连接再编辑或删除。",
     "sessions": "无法读取连接状态，编辑和删除暂不可用，正在重试。",
     "session_ended": "原连接已结束，请重新启动服务器。",
     "profile_open": "请先关闭此服务器的连接页，再编辑配置。",
     "profile_editing": "正在编辑此服务器，请先保存或取消编辑。",
-    "location_save": "桌面位置已改变，但打开位置保存失败，请重试。",
     "move": "无法移动桌面，已保留原页面。",
     "input_lock": "无法更改本地输入锁定状态，请重试。",
-    "keyboard_reset": "无法重置键盘，请重试。",
+    "input_reset": "无法重置输入，请重试。",
     "resolution": "宽高须为 200～8192 的整数，宽度须为偶数，总像素不能超过 16,777,216。",
     "window_size": "无法按桌面尺寸调整窗口，可手动调整窗口大小。",
+    "window_memory": "无法记录窗口大小和位置，重新打开时可能无法恢复。",
     "clipboard": "无法切换剪贴板同步。",
     "clipboard_busy": "正在传输文件，完成后才能切换剪贴板。",
-    "clipboard_sync": "剪贴板同步失败，请重新复制后重试。"
+    "clipboard_sync": "剪贴板同步失败，请重新复制后重试。",
+    "resize_unsupported": "服务器不支持动态分辨率，已保留当前桌面尺寸。",
+    "resize_failed": "分辨率调整失败，已暂停自适应，保留当前画面。",
+    "resize_retry": "未能应用所选分辨率，请等待输入操作结束后重新选择。",
+    "adaptive_save": "自适应设置保存失败，请重试。"
   },
   "actions": {
     "cancel": "取消",
@@ -66,7 +69,6 @@
     "edit": "编辑",
     "up": "上移",
     "down": "下移",
-    "servers": "服务器列表",
     "reconnect": "重新连接",
     "retry": "重试",
     "reload": "重新加载",
@@ -77,10 +79,18 @@
     "resume_window": "独立窗口恢复桌面",
     "lock_ui": "锁定本地输入",
     "unlock_ui": "本地输入已锁定，点击解锁",
-    "reset_keyboard": "重置键盘",
+    "reset_input": "重置输入",
     "fit_window": "适配桌面大小",
     "enable_clipboard": "开启剪贴板同步",
-    "disable_clipboard": "关闭剪贴板同步"
+    "disable_clipboard": "关闭剪贴板同步",
+    "window_resolution": "调整窗口大小（当前 {{size}}）",
+    "desktop_resolution": "调整分辨率（当前 {{size}}）",
+    "desktop_resolution_hint": "选择尺寸不修改配置中的初始分辨率。",
+    "initial_resolution": "{{size}}（默认）",
+    "move_window": "移到独立窗口",
+    "adaptive_resolution": "自适应",
+    "input_text": "输入文本",
+    "close": "关闭"
   },
   "profiles": {
     "password_saved": "已保存，留空保留",
@@ -102,13 +112,14 @@
     "username": "用户名",
     "domain": "域（可选）",
     "password": "密码",
-    "run_in_background": "后台运行（关闭桌面后保持连接）",
     "clipboard_support": "支持剪贴板",
     "resolution": "分辨率",
     "desktop_width": "宽度（像素）",
     "desktop_height": "高度（像素）",
     "custom_resolution": "自定义",
-    "resolution_hint": "下次建立连接时生效。"
+    "disable_mouse_animation": "禁用鼠标动画",
+    "adaptive_window": "窗口自适应分辨率",
+    "adaptive_sidebar": "侧边栏自适应分辨率"
   },
   "modes": {
     "sidebar": "侧边栏",
@@ -119,9 +130,21 @@
     "verify": "请核对 {{host}}:{{port}} 的证书 SHA-256。信任仅适用于此目标，指纹变化将再次提示。"
   },
   "clipboard": {
+    "initializing": "剪贴板通道初始化中",
     "disabled": "已关闭",
     "syncing": "同步中",
     "paused": "待激活",
     "draining": "传输收尾"
+  },
+  "text_input": {
+    "original": "原文",
+    "remaining": "剩余内容",
+    "send": "输入到远程",
+    "send_remaining": "输入剩余内容",
+    "edit_remaining": "编辑剩余内容",
+    "progress": "已确认：{{sent}} / {{total}} 个字符",
+    "cancelling": "当前批次完成后停止… 已确认：{{sent}} / {{total}} 个字符",
+    "cancelled": "已停止，确认的部分已经发送。原文和剩余内容已保留。",
+    "failed": "输入失败，可能已经部分输入。进度只统计收到回执的批次，请核对远程内容并编辑剩余内容后再发送。"
   }
 }

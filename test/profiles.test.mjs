@@ -23,7 +23,7 @@ test('fixed resolution persists, copies and survives password or location update
   profile = await store.call('profiles.save', { ...profile, desktopWidth: 1440, desktopHeight: 960, passwordAction: 'keep' });
   assert.equal(profile.revision, 2);
   profile = await store.call('profiles.savePassword', { ...profile, password: 'synthetic' });
-  profile = await store.call('profiles.setOpenMode', { id: profile.id, openMode: 'window' });
+  profile = await store.call('profiles.save', { ...profile, openMode: 'window', passwordAction: 'keep' });
   const copy = await store.call('profiles.copy', { ...profile, name: 'Copy' });
   for (const row of await new Profiles(directory).call('profiles.list', {})) {
     assert.equal(row.desktopWidth, 1440); assert.equal(row.desktopHeight, 960);
@@ -45,6 +45,28 @@ test('v0 profiles without optional resolution fields read defaults without rewri
   await writeFile(join(directory, 'profiles.json'), JSON.stringify(state));
   const [partial] = await store.call('profiles.list', {});
   assert.equal(partial.desktopWidth, 1920); assert.equal(partial.desktopHeight, 800);
+});
+
+test('mouse animation defaults on without rewriting v0 data and explicit disabling survives storage operations', async t => {
+  const { store, directory, read } = await fixture(t);
+  let profile = await store.call('profiles.save', fields);
+  assert.equal(profile.disableMouseAnimation, false);
+  const state = await read(); delete state.profiles[0].disable_mouse_animation;
+  const raw = JSON.stringify(state);
+  await writeFile(join(directory, 'profiles.json'), raw);
+  assert.deepEqual(await new Profiles(directory).call('profiles.list', {}), [profile]);
+  assert.equal(await readFile(join(directory, 'profiles.json'), 'utf8'), raw);
+  profile = await store.call('profiles.save', { ...profile, disableMouseAnimation: true, passwordAction: 'keep' });
+  assert.equal(profile.revision, 2);
+  assert.equal((await read()).profiles[0].disable_mouse_animation, true);
+  profile = await store.call('profiles.savePassword', { ...profile, password: 'synthetic' });
+  profile = await store.call('profiles.save', { ...profile, openMode: 'window', passwordAction: 'keep' });
+  await store.call('profiles.copy', { ...profile, name: 'Copy' });
+  assert.ok((await new Profiles(directory).call('profiles.list', {})).every(row => row.disableMouseAnimation));
+  for (const value of [null, 0, 'false']) await assert.rejects(store.call('profiles.save', { ...profile, disableMouseAnimation: value, passwordAction: 'keep' }), /PROFILE_INVALID/);
+  const enabled = await store.call('profiles.save', { ...profile, disableMouseAnimation: false, passwordAction: 'keep' });
+  assert.equal(enabled.disableMouseAnimation, false);
+  assert.equal((await store.call('profiles.get', enabled)).disableMouseAnimation, false);
 });
 
 test('invalid resolution writes preserve the profile, while valid boundary sizes work', async t => {
@@ -255,55 +277,32 @@ test('password-only saves reject stale, invalid and deleted targets without over
   assert.deepEqual(await store.call('profiles.list', {}), []);
 });
 
-test('remembering placement changes only the latest open mode, preserves credentials, and keeps a valid launch', async t => {
+test('explicit opening preference edits preserve credentials and follow normal revision checks', async t => {
   const { store, read } = await fixture(t);
   const original = await store.call('profiles.save', { ...fields, passwordAction: 'set', password: 'synthetic-position-password' });
   const edited = await store.call('profiles.save', { ...original, name: 'Latest name', passwordAction: 'keep' });
   const cipher = (await read()).profiles[0].password;
-  await store.call('profiles.launch', edited);
-  const placed = await store.call('profiles.setOpenMode', { id: edited.id, openMode: 'window' });
+  const placed = await store.call('profiles.save', { ...edited, openMode: 'window', passwordAction: 'keep' });
   assert.deepEqual(placed, { ...edited, openMode: 'window', revision: edited.revision + 1 });
   assert.deepEqual((await read()).profiles[0].password, cipher);
   assert.equal(await store.call('profiles.password', placed), 'synthetic-position-password');
-  assert.deepEqual(await store.call('profiles.consumeLaunch', { id: edited.id }), placed);
-  assert.deepEqual(await store.call('profiles.setOpenMode', { id: edited.id, openMode: 'window' }), placed);
+  assert.deepEqual(await store.call('profiles.save', { ...placed, passwordAction: 'keep' }), placed);
+  await assert.rejects(store.call('profiles.save', { ...edited, openMode: 'sidebar', passwordAction: 'keep' }), /PROFILE_CONFLICT/);
 });
 
-test('placement does not revive a deleted profile or validate a launch made stale by other edits', async t => {
+test('explicit opening preference edits invalidate stale launches and do not revive deleted profiles', async t => {
   const { store } = await fixture(t);
   const original = await store.call('profiles.save', fields);
   await store.call('profiles.launch', original);
-  const edited = await store.call('profiles.save', { ...original, name: 'Changed after Start', passwordAction: 'keep' });
-  const placed = await store.call('profiles.setOpenMode', { id: edited.id, openMode: 'window' });
-  await assert.rejects(store.call('profiles.consumeLaunch', { id: edited.id }), /PROFILE_CONFLICT/);
+  const placed = await store.call('profiles.save', { ...original, openMode: 'window', passwordAction: 'keep' });
+  await assert.rejects(store.call('profiles.consumeLaunch', { id: original.id }), /PROFILE_CONFLICT/);
   await store.call('profiles.delete', placed);
-  assert.equal(await store.call('profiles.setOpenMode', { id: edited.id, openMode: 'sidebar' }), null);
+  await assert.rejects(store.call('profiles.save', { ...placed, openMode: 'sidebar', passwordAction: 'keep' }), /PROFILE_MISSING/);
   assert.deepEqual(await store.call('profiles.list', {}), []);
 });
 
 
-test('background running is optional, defaults off and preserves explicit choices across updates and copies', async t => {
-  const { store, directory, read } = await fixture(t);
-  let profile = await store.call('profiles.save', { ...fields, passwordAction: 'set', password: 'synthetic' });
-  assert.equal(profile.runInBackground, false);
-  const old = await read(); delete old.profiles[0].run_in_background;
-  await writeFile(join(directory, 'profiles.json'), JSON.stringify(old));
-  assert.equal((await store.call('profiles.get', profile)).runInBackground, false);
-  assert.equal((await read()).profiles[0].run_in_background, undefined, 'Normal reads do not migrate or rewrite the old profile.');
-  for (const value of [null, 0, 'true']) await assert.rejects(store.call('profiles.save', { ...profile, runInBackground: value, passwordAction: 'keep' }), /PROFILE_INVALID/);
-  profile = await store.call('profiles.save', { ...profile, runInBackground: true, passwordAction: 'keep' });
-  assert.equal(profile.runInBackground, true);
-  assert.equal((await read()).profiles[0].run_in_background, true);
-  assert.equal((await read()).version, 0);
-  const moved = await store.call('profiles.setOpenMode', { id: profile.id, openMode: 'window' });
-  assert.equal(moved.runInBackground, true);
-  const copy = await store.call('profiles.copy', { ...moved, name: 'Copy' });
-  assert.equal(copy.runInBackground, true);
-  const disabled = await store.call('profiles.save', { ...moved, runInBackground: false, passwordAction: 'keep' });
-  assert.equal(disabled.runInBackground, false);
-  assert.equal(await store.call('profiles.password', disabled), 'synthetic');
-  assert.equal((await read()).profiles[0].run_in_background, false);
-});
+
 
 
 test('clipboard support defaults off without migration and survives copy and partial updates', async t => {
@@ -316,8 +315,46 @@ test('clipboard support defaults off without migration and survives copy and par
   assert.equal((await read()).profiles[0].clipboard_support, undefined);
   profile = await store.call('profiles.save', { ...profile, clipboardSupport: true, passwordAction: 'keep' });
   assert.equal((await read()).profiles[0].clipboard_support, true);
-  const moved = await store.call('profiles.setOpenMode', { id: profile.id, openMode: 'window' });
+  const moved = await store.call('profiles.save', { ...profile, openMode: 'window', passwordAction: 'keep' });
   const copy = await store.call('profiles.copy', { ...moved, name: 'Clipboard copy' });
   assert.equal(copy.clipboardSupport, true);
   for (const invalid of [null, 0, 'true']) await assert.rejects(store.call('profiles.save', { ...moved, clipboardSupport: invalid, passwordAction: 'keep' }), /PROFILE_INVALID/);
+});
+
+test('adaptive flags default off in existing v0 data, persist independently and survive copies', async t => {
+  const { store, directory, read } = await fixture(t);
+  let profile = await store.call('profiles.save', fields);
+  assert.equal(profile.adaptiveWindow, false); assert.equal(profile.adaptiveSidebar, false);
+  const old = await read(); delete old.profiles[0].adaptive_window; delete old.profiles[0].adaptive_sidebar;
+  await writeFile(join(directory, 'profiles.json'), JSON.stringify(old));
+  assert.equal((await store.call('profiles.get', profile)).adaptiveWindow, false);
+  assert.equal((await read()).profiles[0].adaptive_window, undefined);
+  profile = await store.call('profiles.save', { ...profile, adaptiveWindow: true, adaptiveSidebar: false, passwordAction: 'keep' });
+  const copy = await store.call('profiles.copy', { ...profile, name: 'Adaptive copy' });
+  assert.equal(copy.adaptiveWindow, true); assert.equal(copy.adaptiveSidebar, false);
+  assert.equal((await read()).profiles[0].adaptive_window, true);
+  for (const field of ['adaptiveWindow','adaptiveSidebar']) for (const invalid of [null, 0, 'true']) {
+    await assert.rejects(store.call('profiles.save', { ...profile, [field]: invalid, passwordAction: 'keep' }), /PROFILE_INVALID/);
+  }
+});
+
+
+test('adaptive preference writes merge only the selected location and survive a new store without changing credentials or initial size', async t => {
+  const {store,directory,read} = await fixture(t);
+  const original = await store.call('profiles.save',{...fields,passwordAction:'set',password:'fixture',desktopWidth:1536,desktopHeight:864});
+  const encrypted=(await read()).profiles[0].password;
+  await Promise.all(['window','sidebar'].map(location=>store.call('preferences.adaptive',{id:original.id,location,enabled:true})));
+  const next = await new Profiles(directory).call('profiles.get',{id:original.id});
+  assert.equal(next.adaptiveWindow,true); assert.equal(next.adaptiveSidebar,true);
+  assert.equal(next.revision,original.revision+2);
+  assert.equal(next.desktopWidth,1536); assert.equal(next.desktopHeight,864);
+  assert.deepEqual((await read()).profiles[0].password,encrypted);
+  await assert.rejects(store.call('profiles.save',{...original,passwordAction:'keep'}),/PROFILE_CONFLICT/);
+  for(const invalid of [{enabled:'true'},{location:'main'},{name:'changed'}])
+    await assert.rejects(store.call('preferences.adaptive',{id:original.id,location:'window',enabled:false,...invalid}),/PROFILE_INVALID/);
+  assert.equal((await store.call('preferences.adaptive',{id:original.id,location:'window',enabled:true})).revision,next.revision);
+  const off=await store.call('preferences.adaptive',{id:original.id,location:'window',enabled:false});
+  assert.equal(off.adaptiveWindow,false); assert.equal(off.adaptiveSidebar,true);
+  await store.call('profiles.delete',off);
+  await assert.rejects(store.call('preferences.adaptive',{id:off.id,location:'window',enabled:true}),/PROFILE_MISSING/);
 });

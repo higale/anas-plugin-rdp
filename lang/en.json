@@ -36,22 +36,25 @@
     "trust": "Could not save certificate trust. Try again.",
     "load": "Component loading failed. Reopen the plugin.",
     "language": "Some language files could not be loaded. Check the plugin language files in Anas Settings > Plugins.",
-    "open_profiles": "Could not open the server list. Try again.",
     "conflict_editor": "This profile changed. Reloading discards unsaved edits.",
     "active": "Disconnect this server before editing or deleting its profile.",
     "sessions": "Cannot read connection status. Editing and deletion are unavailable while retrying.",
     "session_ended": "The previous connection ended. Start the server again.",
     "profile_open": "Close this server’s connection page before editing its profile.",
     "profile_editing": "Save or cancel this server’s edits before opening its connection page.",
-    "location_save": "The desktop position changed, but its opening preference could not be saved. Try again.",
     "move": "Could not move the desktop. Its original page is preserved.",
     "input_lock": "Could not change the local input lock. Try again.",
-    "keyboard_reset": "Could not reset the keyboard. Try again.",
+    "input_reset": "Could not reset keyboard and mouse input. Try again.",
     "resolution": "Width and height must be integers from 200 to 8192, width must be even, and the total must not exceed 16,777,216 pixels.",
     "window_size": "Could not fit the window to the desktop. You can resize the window manually.",
+    "window_memory": "Could not remember the window size and position. Reopening may not restore them.",
     "clipboard": "Could not switch clipboard sync.",
     "clipboard_busy": "A file transfer is in progress. Wait for it to finish before switching clipboard sync.",
-    "clipboard_sync": "Clipboard sync failed. Copy the content again to retry."
+    "clipboard_sync": "Clipboard sync failed. Copy the content again to retry.",
+    "resize_unsupported": "The server does not support dynamic resolution. The current desktop size is retained.",
+    "resize_failed": "Resolution adjustment failed. Adaptation is paused; the current image is retained.",
+    "resize_retry": "The selected resolution could not be applied. Wait for input operations to finish, then select it again.",
+    "adaptive_save": "Could not save adaptive resolution. Please retry."
   },
   "actions": {
     "cancel": "Cancel",
@@ -66,7 +69,6 @@
     "edit": "Edit",
     "up": "Move up",
     "down": "Move down",
-    "servers": "Server list",
     "reconnect": "Reconnect",
     "retry": "Retry",
     "reload": "Reload",
@@ -77,10 +79,18 @@
     "resume_window": "Resume in window",
     "lock_ui": "Lock local input",
     "unlock_ui": "Local input locked — click to unlock",
-    "reset_keyboard": "Reset keyboard",
+    "reset_input": "Reset input",
     "fit_window": "Fit window to desktop",
     "enable_clipboard": "Enable clipboard sync",
-    "disable_clipboard": "Disable clipboard sync"
+    "disable_clipboard": "Disable clipboard sync",
+    "window_resolution": "Resize window (current {{size}})",
+    "desktop_resolution": "Change resolution (current {{size}})",
+    "desktop_resolution_hint": "Choosing a size leaves the saved initial resolution unchanged.",
+    "initial_resolution": "{{size}} (default)",
+    "move_window": "Move to separate window",
+    "adaptive_resolution": "Adaptive resolution",
+    "input_text": "Input text",
+    "close": "Close"
   },
   "profiles": {
     "password_saved": "Saved; leave blank to keep",
@@ -102,13 +112,14 @@
     "username": "Username",
     "domain": "Domain (optional)",
     "password": "Password",
-    "run_in_background": "Run in background (keep connected after closing the desktop)",
     "clipboard_support": "Support clipboard",
     "resolution": "Resolution",
     "desktop_width": "Width (px)",
     "desktop_height": "Height (px)",
     "custom_resolution": "Custom",
-    "resolution_hint": "Applies when a new connection is established."
+    "disable_mouse_animation": "Disable mouse animation",
+    "adaptive_window": "Adapt resolution in windows",
+    "adaptive_sidebar": "Adapt resolution in sidebar"
   },
   "modes": {
     "sidebar": "Sidebar",
@@ -119,9 +130,21 @@
     "verify": "Verify the certificate SHA-256 for {{host}}:{{port}}. Trust applies only to this target; changes require confirmation."
   },
   "clipboard": {
+    "initializing": "Clipboard channel initializing",
     "disabled": "Off",
     "syncing": "Syncing",
     "paused": "Waiting for activation",
     "draining": "Finishing transfer"
+  },
+  "text_input": {
+    "original": "Original text",
+    "remaining": "Remaining text",
+    "send": "Input to remote",
+    "send_remaining": "Input remaining text",
+    "edit_remaining": "Edit remaining text",
+    "progress": "Confirmed: {{sent}} / {{total}} characters",
+    "cancelling": "Stopping after the current batch… Confirmed: {{sent}} / {{total}} characters",
+    "cancelled": "Stopped. The confirmed portion has been sent. Original and remaining text are preserved.",
+    "failed": "Input failed and may be partially delivered. Only acknowledged batches count as confirmed. Check the remote content and edit the remaining text before sending again."
   }
 }

@@ -76,6 +76,7 @@ dependencies = [
  "ironrdp-client",
  "ironrdp-cliprdr",
  "ironrdp-core",
+ "ironrdp-displaycontrol",
  "ironrdp-pdu",
  "ironrdp-tls",
  "objc2-app-kit",
@@ -1442,7 +1443,6 @@ dependencies = [
 [[package]]
 name = "ironrdp-client"
 version = "0.1.0"
-source = "git+https://github.com/Devolutions/IronRDP.git?rev=2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d#2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d"
 dependencies = [
  "anyhow",
  "futures-util",

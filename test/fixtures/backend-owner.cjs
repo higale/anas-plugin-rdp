@@ -6,5 +6,5 @@ childProcess.spawn = (...args) => { const child = original(...args); helperPid =
 const directory = process.argv[2];
 const plugin = require(path.join(directory, 'backend.cjs'));
 const backend = { ...plugin, call: (method, params) => plugin.call(method, params, { caller: null, views: [] }) };
-backend.activate({ pluginId: 'rdp', packageDirectory: directory, dataDirectory: directory, host: { getViews: async () => [], onViewsChanged: () => () => {} } });
+backend.activate({ pluginId: 'rdp', packageDirectory: directory, dataDirectory: directory, tempDirectory: path.join(directory, 'tmp', 'anas-plugin-rdp'), host: { getViews: async () => [], onViewsChanged: () => () => {} } });
 backend.call('create', { owner: 'fixture', host: 'test.invalid', port: 3389, username: 'test', password: 'test' }).then(() => process.send({ ready: true, pid: helperPid }));

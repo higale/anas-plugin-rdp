@@ -6,8 +6,9 @@ use futures_util::{SinkExt, StreamExt};
 use ironrdp_client::{
     config::{ClipboardType, ConfigBuilder, Destination},
     output_channel::output_channel,
-    rdp::{RdpClient, RdpInputEvent, RdpInputSender, RdpOutputEvent},
+    rdp::{DisplayResizeFallbackReason, RdpClient, RdpInputEvent, RdpInputSender, RdpOutputEvent},
 };
+use ironrdp_displaycontrol::client::DisplayControlClient;
 use ironrdp_pdu::input::{
     MousePdu,
     fast_path::{FastPathInputEvent, KeyboardFlags},
@@ -81,12 +82,15 @@ struct Snapshot {
     ui_locked: bool,
     clipboard_enabled: bool,
     clipboard_state: String,
+    resize_error: Option<String>,
+    resize_supported: bool,
     ui_revision: u64,
     frame_revision: u64,
     frame_time: u64,
     cursor_revision: u64,
     cursor_time: u64,
     position: Option<(u16, u16)>,
+    cursor_animate: bool,
     input_revision: u64,
     input_time: u64,
 }
@@ -126,14 +130,22 @@ impl Controls {
         self.buttons.clear();
         Ok(())
     }
-    fn reset_keyboard(&mut self, input: &RdpInputSender) -> anyhow::Result<()> {
+    fn reset_input(&mut self, input: &RdpInputSender, position: (u16, u16)) -> anyhow::Result<()> {
         use ironrdp_pdu::input::fast_path::SynchronizeFlags;
-        send(
-            input,
-            FastPathInputEvent::SyncEvent(SynchronizeFlags::empty()),
-        )?;
-        // Explicit reset only. Ordinary tool input never records or clears held keys.
+        // Queue the whole reset together, including buttons not tracked by the UI.
+        // Ordinary tool input intentionally does not track held keys or buttons.
+        let mut events = super::input::Events::new();
+        events.push(FastPathInputEvent::SyncEvent(SynchronizeFlags::empty()));
+        events.extend(
+            [0x1000, 0x2000, 0x4000]
+                .map(|button| super::input::mouse(position.0, position.1, button, 0)),
+        );
+        input
+            .try_send(RdpInputEvent::FastPath(events))
+            .map_err(|_| anyhow::anyhow!("RDP_INPUT_UNAVAILABLE"))?;
         self.keys.clear();
+        self.buttons.clear();
+        self.position = position;
         Ok(())
     }
     fn release_detached(&mut self, input: &RdpInputSender) -> anyhow::Result<()> {
@@ -221,6 +233,53 @@ fn publish(state: &watch::Sender<Snapshot>, change: impl FnOnce(&mut Snapshot)) 
         snapshot.revision += 1;
     });
 }
+
+#[derive(Default)]
+struct DisplayUpdates {
+    revision: Option<u64>,
+    frame_revision: Option<u64>,
+    cursor_revision: Option<u64>,
+    cursor: Option<Value>,
+}
+impl DisplayUpdates {
+    fn next(
+        &mut self,
+        snapshot: &Snapshot,
+        mouse_sequence: u64,
+    ) -> anyhow::Result<Option<(Value, Option<Bytes>)>> {
+        if self.revision == Some(snapshot.revision)
+            && self.cursor_revision == Some(snapshot.cursor_revision)
+        {
+            return Ok(None);
+        }
+        let image = snapshot
+            .image
+            .clone()
+            .filter(|_| self.frame_revision != Some(snapshot.frame_revision));
+        let mut metadata = json!({"type":"snapshot","revision":snapshot.revision,"state":snapshot.state,
+            "cursorPosition":snapshot.position.map(|(x,y)| json!({"x":x,"y":y})),"cursorAnimate":snapshot.cursor_animate,"mouseSequence":mouse_sequence,
+            "owner":snapshot.owner,"epoch":snapshot.epoch,"clipboardEnabled":snapshot.clipboard_enabled,
+            "clipboardState":snapshot.clipboard_state,"resizeError":snapshot.resize_error,"resizeSupported":snapshot.resize_supported,"uiLocked":snapshot.ui_locked,"uiRevision":snapshot.ui_revision,"image":image.is_some()});
+        if self.cursor_revision != Some(snapshot.cursor_revision)
+            && self.cursor.as_ref() != Some(&snapshot.cursor)
+        {
+            metadata["cursor"] = if snapshot.cursor["kind"] == "hidden" {
+                snapshot.cursor.clone()
+            } else {
+                let (width, height, x, y, pixels) =
+                    super::screenshot::cursor_pixels(&snapshot.cursor)?;
+                json!({"kind":snapshot.cursor["kind"],"width":width,"height":height,"x":x,"y":y,"pixels":pixels})
+            };
+            self.cursor = Some(snapshot.cursor.clone());
+        }
+        self.revision = Some(snapshot.revision);
+        self.cursor_revision = Some(snapshot.cursor_revision);
+        if image.is_some() {
+            self.frame_revision = Some(snapshot.frame_revision);
+        }
+        Ok(Some((metadata, image)))
+    }
+}
 pub async fn run() -> anyhow::Result<()> {
     let mut stdin = std::io::BufReader::new(std::io::stdin());
     let mut line = String::new();
@@ -246,7 +305,15 @@ pub async fn run() -> anyhow::Result<()> {
     } else {
         format!("{}:{}", config.target.host, config.target.port)
     };
+    let (display_control, mut display_control_ready) = watch::channel(false);
     let engine_config = ConfigBuilder::new()
+        .with_dvc(move |_| {
+            let ready = display_control.clone();
+            Some(DisplayControlClient::new(move |_| {
+                ready.send_replace(true);
+                Ok(Vec::new())
+            }))
+        })
         .with_client_build(0)
         .with_client_dir("Anas")
         .with_client_name("Anas")
@@ -280,7 +347,9 @@ pub async fn run() -> anyhow::Result<()> {
         }))
         .build()?;
     let (outputs, mut receiver) = output_channel(16);
-    let mut client = RdpClient::new(engine_config, outputs).with_auto_reconnect(0);
+    let mut client = RdpClient::new(engine_config, outputs)
+        .with_auto_reconnect(0)
+        .with_resize_reconnect(false);
     let input = client.input_sender();
     let clipboard = if config.clipboard_support {
         let bridge = super::clipboard::Clipboard::new(input.clone())?;
@@ -300,13 +369,20 @@ pub async fn run() -> anyhow::Result<()> {
         epoch: 0,
         ui_locked: false,
         clipboard_enabled: false,
-        clipboard_state: "disabled".into(),
+        clipboard_state: clipboard_status
+            .as_ref()
+            .map(|status| *status.borrow())
+            .unwrap_or("disabled")
+            .into(),
+        resize_error: None,
+        resize_supported: false,
         ui_revision: 0,
         frame_revision: 0,
         frame_time: 0,
         cursor_revision: 0,
         cursor_time: 0,
         position: None,
+        cursor_animate: false,
         input_revision: 0,
         input_time: 0,
     });
@@ -354,6 +430,10 @@ pub async fn run() -> anyhow::Result<()> {
         tokio::select! {
             _ = &mut engine, if !engine_done => { engine_done = true; },
             _ = &mut releases => {},
+            Ok(()) = display_control_ready.changed(), if !terminal => {
+                let supported = *display_control_ready.borrow_and_update();
+                publish(&state, |snapshot| snapshot.resize_supported = supported);
+            },
             _ = tokio::time::sleep_until(next_input_at), if timed_input.is_some() => {
                 let mut owner = controls.lock().expect("controls");
                 let (_, gesture) = timed_input.as_mut().expect("pending input");
@@ -366,6 +446,7 @@ pub async fn run() -> anyhow::Result<()> {
                         snapshot.input_revision += 1; snapshot.input_time = now_ms();
                         if let Some(position) = position {
                             snapshot.position = Some(position); snapshot.cursor_revision += 1; snapshot.cursor_time = snapshot.input_time;
+                            snapshot.cursor_animate = gesture.animate_cursor();
                         }
                     });
                 }
@@ -426,6 +507,15 @@ pub async fn run() -> anyhow::Result<()> {
                     let method = command["method"].as_str().context("missing method")?;
                     let mut owner = controls.lock().expect("controls");
                     if method == "lease" { return Ok(Some(json!({"owner":owner.owner,"epoch":owner.epoch}))); }
+                    if method == "resize" {
+                        if state.borrow().state != "connected" { bail!("RDP_NOT_CONNECTED"); }
+                        if let Some(error) = &state.borrow().resize_error { bail!("{error}"); }
+                        if timed_input.is_some() || !owner.keys.is_empty() || !owner.buttons.is_empty() { bail!("RDP_INPUT_BUSY"); }
+                        let width = u16::try_from(command["width"].as_u64().context("RDP_INVALID_RESOLUTION")?)?;
+                        let height = u16::try_from(command["height"].as_u64().context("RDP_INVALID_RESOLUTION")?)?;
+                        resize_display(&owner, &input, command["page"].as_str(), command["expectedEpoch"].as_u64(), width, height)?;
+                        return Ok(Some(json!({"accepted":true})));
+                    }
                     if method == "setClipboardActivity" {
                         let active = command["active"].as_bool().context("RDP_CLIPBOARD_UNAVAILABLE")?;
                         let can_publish = command["publish"].as_bool().context("RDP_CLIPBOARD_UNAVAILABLE")?;
@@ -448,10 +538,11 @@ pub async fn run() -> anyhow::Result<()> {
                         emit(json!({"uiLocked":owner.ui_locked}));
                         return Ok(Some(json!({"ui_locked":owner.ui_locked,"uiRevision":owner.ui_revision})));
                     }
-                    if method == "resetKeyboard" {
+                    if method == "resetInput" {
                         if state.borrow().state != "connected" { bail!("RDP_NOT_CONNECTED"); }
-                        owner.reset_keyboard(&input)?;
-                        // Commit the interruption only after Synchronize was accepted by the queue.
+                        let position = state.borrow().position.unwrap_or(owner.position);
+                        owner.reset_input(&input, position)?;
+                        // No old sequence step can run between enqueueing the reset and cancelling it.
                         if let Some((interrupted, _)) = timed_input.take() {
                             emit(json!({"request":interrupted,"error":"RDP_INPUT_RESET"}));
                         }
@@ -489,6 +580,7 @@ pub async fn run() -> anyhow::Result<()> {
                             snapshot.input_revision += 1; snapshot.input_time = now_ms();
                             if let Some(position) = batch.position {
                                 snapshot.position = Some(position); snapshot.cursor_revision += 1; snapshot.cursor_time = snapshot.input_time;
+                                snapshot.cursor_animate = batch.animate_cursor;
                             }
                         });
                         return Ok(Some(json!({"accepted":true,"epoch":owner.epoch,"input_revision":state.borrow().input_revision})));
@@ -527,6 +619,13 @@ pub async fn run() -> anyhow::Result<()> {
                     continue
                 };
                 match event {
+                    RdpOutputEvent::DisplayResizeRejected(reason) => {
+                        let error = match reason {
+                            DisplayResizeFallbackReason::DisplayControlUnavailable => "RDP_RESIZE_UNSUPPORTED",
+                            DisplayResizeFallbackReason::CapabilitiesTimedOut | DisplayResizeFallbackReason::ReactivationTimedOut => "RDP_RESIZE_TIMEOUT",
+                        };
+                        publish(&state, |snapshot| snapshot.resize_error = Some(error.into()));
+                    },
                     RdpOutputEvent::Connected => { established = true; publish(&state, |snapshot| snapshot.state = "connected".into()); emit(json!({"status":"connected"})); },
                     RdpOutputEvent::Image { buffer, width, height } => match frame(buffer, width.get(), height.get()) {
                         Ok(image) => publish(&state, |snapshot| { snapshot.image = Some(image); snapshot.frame_revision += 1; snapshot.frame_time = now_ms(); }),
@@ -534,7 +633,10 @@ pub async fn run() -> anyhow::Result<()> {
                     },
                     RdpOutputEvent::PointerDefault => publish(&state, |snapshot| { snapshot.cursor = json!({"kind":"default"}); snapshot.cursor_revision += 1; snapshot.cursor_time = now_ms(); }),
                     RdpOutputEvent::PointerHidden => publish(&state, |snapshot| { snapshot.cursor = json!({"kind":"hidden"}); snapshot.cursor_revision += 1; snapshot.cursor_time = now_ms(); }),
-                    RdpOutputEvent::PointerPosition { x, y } => state.send_modify(|snapshot| { snapshot.position = Some((x, y)); snapshot.cursor_revision += 1; snapshot.cursor_time = now_ms(); }),
+                    RdpOutputEvent::PointerPosition { x, y } => state.send_modify(|snapshot| {
+                        if snapshot.position != Some((x, y)) { snapshot.cursor_animate = false; }
+                        snapshot.position = Some((x, y)); snapshot.cursor_revision += 1; snapshot.cursor_time = now_ms();
+                    }),
                     RdpOutputEvent::PointerBitmap(pointer) => {
                         if pointer.bitmap_data.len() <= 1024 * 1024 {
                             publish(&state, |snapshot| { snapshot.cursor = json!({"kind":"bitmap","width":pointer.width,"height":pointer.height,
@@ -656,21 +758,21 @@ async fn display(
     };
     let mut updates = state.subscribe();
     let mut pending: Option<(u64, Instant, bool)> = None;
-    let mut sent_revision = None;
+    let mut sent = DisplayUpdates::default();
+    let mut mouse_sequence = 0;
     let mut tick = tokio::time::interval(Duration::from_millis(33));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             _ = tick.tick() => {
                 if pending.as_ref().is_some_and(|(_, time, _)| time.elapsed() > Duration::from_secs(10)) { break; }
                 if pending.is_some() { continue; }
                 let snapshot = updates.borrow_and_update().clone();
-                if sent_revision == Some(snapshot.revision) { continue; }
-                timeout(IO_TIMEOUT, ws.send(Message::Text(json!({"type":"snapshot","revision":snapshot.revision,"state":snapshot.state,
-                    "cursor":snapshot.cursor,"owner":snapshot.owner,"epoch":snapshot.epoch,"clipboardEnabled":snapshot.clipboard_enabled,"clipboardState":snapshot.clipboard_state,"uiLocked":snapshot.ui_locked,"uiRevision":snapshot.ui_revision,"image":snapshot.image.is_some()}).to_string().into()))).await??;
-                let complete_image = snapshot.state == "connected" && snapshot.image.is_some();
-                if let Some(image) = snapshot.image { timeout(IO_TIMEOUT, ws.send(Message::Binary(image))).await??; }
+                let Some((metadata, image)) = sent.next(&snapshot, mouse_sequence)? else { continue; };
+                timeout(IO_TIMEOUT, ws.send(Message::Text(metadata.to_string().into()))).await??;
+                let complete_image = snapshot.state == "connected" && image.is_some();
+                if let Some(image) = image { timeout(IO_TIMEOUT, ws.send(Message::Binary(image))).await??; }
                 pending = Some((snapshot.revision, Instant::now(), complete_image));
-                sent_revision = Some(snapshot.revision);
             },
             message = ws.next() => match message {
                 Some(Ok(Message::Text(text))) => {
@@ -696,12 +798,19 @@ async fn display(
                             continue;
                         }
                         if owner.owner.as_deref() != Some(&page) || message["epoch"].as_u64() != Some(owner.epoch) { continue; }
+                        let sequence = if message["type"] == "mouse" {
+                            let sequence = message["mouseSequence"].as_u64().context("invalid mouse sequence")?;
+                            if sequence <= mouse_sequence || sequence > 9_007_199_254_740_991 { bail!("invalid mouse sequence"); }
+                            sequence
+                        } else { mouse_sequence };
                         handle_input(&message, &mut owner, &input)?;
-                        // Metadata for capture only; input must not retransmit the full frame.
+                        mouse_sequence = sequence;
+                        // Position updates share the bounded display stream, never resend the frame.
                         state.send_modify(|snapshot| {
                             snapshot.input_revision += 1; snapshot.input_time = now_ms();
                             if message["type"] == "mouse" {
                                 snapshot.position = Some((message["x"].as_u64().unwrap_or(0) as u16, message["y"].as_u64().unwrap_or(0) as u16));
+                                snapshot.cursor_animate = false;
                                 snapshot.cursor_revision += 1; snapshot.cursor_time = snapshot.input_time;
                             }
                         });
@@ -714,6 +823,33 @@ async fn display(
         }
     }
 
+    Ok(())
+}
+
+fn resize_display(
+    owner: &Controls,
+    input: &RdpInputSender,
+    page: Option<&str>,
+    epoch: Option<u64>,
+    width: u16,
+    height: u16,
+) -> anyhow::Result<()> {
+    if page.is_none()
+        || owner.owner.as_deref() != page
+        || epoch != Some(owner.epoch)
+        || !owner.ready.contains(page.unwrap())
+    {
+        bail!("RDP_OWNERSHIP_CHANGED");
+    }
+    validate_resolution(width, height)?;
+    input
+        .try_send(RdpInputEvent::Resize {
+            width,
+            height,
+            scale_factor: 100,
+            physical_size: None,
+        })
+        .map_err(|_| anyhow::anyhow!("RDP_INPUT_UNAVAILABLE"))?;
     Ok(())
 }
 
@@ -842,23 +978,99 @@ mod tests {
                 revision: 0,
                 state: "connected".into(),
                 image: None,
-                cursor: Value::Null,
+                cursor: json!({"kind":"default"}),
                 owner: Some("page".into()),
                 epoch: 0,
                 ui_locked: false,
                 clipboard_enabled: false,
                 clipboard_state: "disabled".into(),
+                resize_error: None,
+                resize_supported: false,
                 ui_revision: 0,
                 frame_revision: 0,
                 frame_time: 0,
                 cursor_revision: 0,
                 cursor_time: 0,
                 position: None,
+                cursor_animate: false,
                 input_revision: 0,
                 input_time: 0,
             })
             .0,
         )
+    }
+
+    #[test]
+    fn display_sends_cursor_updates_without_retransmitting_frames_or_shapes() {
+        let state = connected_state();
+        state.send_modify(|snapshot| {
+            snapshot.image = Some(frame(vec![0xff123456; 4], 2, 2).unwrap());
+        });
+        let mut display = DisplayUpdates::default();
+        let (initial, image) = display.next(&state.borrow(), 0).unwrap().unwrap();
+        assert!(image.is_some());
+        assert_eq!(initial["cursorPosition"], Value::Null);
+        assert_eq!(initial["cursorAnimate"], false);
+        assert_eq!(initial["cursor"]["kind"], "default");
+        assert_eq!(
+            initial["cursor"]["pixels"].as_array().unwrap().len(),
+            12 * 16 * 4
+        );
+        assert!(display.next(&state.borrow(), 0).unwrap().is_none());
+
+        // Several accepted moves within a display tick coalesce into the last position.
+        for position in [(0, 0), (1, 0), (1, 1)] {
+            state.send_modify(|snapshot| {
+                snapshot.position = Some(position);
+                snapshot.cursor_animate = true;
+                snapshot.cursor_revision += 1;
+            });
+        }
+        let (moved, image) = display.next(&state.borrow(), 3).unwrap().unwrap();
+        assert!(image.is_none());
+        assert_eq!(moved["image"], false);
+        assert!(moved.get("cursor").is_none());
+        assert_eq!(moved["cursorPosition"], json!({"x":1,"y":1}));
+        assert_eq!(moved["mouseSequence"], 3);
+        assert_eq!(moved["cursorAnimate"], true);
+        assert!(display.next(&state.borrow(), 3).unwrap().is_none());
+
+        // A click at the same coordinates must still cancel a local animation.
+        publish(&state, |snapshot| snapshot.cursor_animate = false);
+        let (clicked, image) = display.next(&state.borrow(), 3).unwrap().unwrap();
+        assert_eq!(clicked["cursorPosition"], moved["cursorPosition"]);
+        assert_eq!(clicked["cursorAnimate"], false);
+        assert!(image.is_none());
+
+        publish(&state, |snapshot| {
+            snapshot.cursor = json!({"kind":"hidden"});
+            snapshot.cursor_revision += 1;
+        });
+        let (hidden, image) = display.next(&state.borrow(), 3).unwrap().unwrap();
+        assert!(image.is_none());
+        assert_eq!(hidden["cursor"]["kind"], "hidden");
+        publish(&state, |snapshot| snapshot.ui_locked = true);
+        let (locked, image) = display.next(&state.borrow(), 3).unwrap().unwrap();
+        assert!(image.is_none());
+        assert!(locked.get("cursor").is_none());
+
+        publish(&state, |snapshot| snapshot.frame_revision += 1);
+        assert!(
+            display
+                .next(&state.borrow(), 3)
+                .unwrap()
+                .unwrap()
+                .1
+                .is_some()
+        );
+        // A new page receives a complete frame and the latest cursor even without a new RDP frame.
+        let (restored, image) = DisplayUpdates::default()
+            .next(&state.borrow(), 0)
+            .unwrap()
+            .unwrap();
+        assert!(image.is_some());
+        assert_eq!(restored["cursorPosition"], json!({"x":1,"y":1}));
+        assert_eq!(restored["cursor"]["kind"], "hidden");
     }
 
     #[tokio::test]
@@ -954,7 +1166,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_reset_queues_zero_flag_synchronize_and_preserves_connection_controls() {
+    fn explicit_reset_releases_keyboard_and_all_mouse_buttons_together() {
         let (input, mut receiver) = RdpInputSender::channel(1);
         let mut controls = Controls {
             owner: Some("page".into()),
@@ -964,15 +1176,24 @@ mod tests {
             ..Default::default()
         };
         controls.keys.extend([(30, false), (29, false), (56, true)]);
-        controls.reset_keyboard(&input).unwrap();
+        controls.buttons.insert(0x1000);
+        controls.position = (2, 3);
+        controls.reset_input(&input, (73, 91)).unwrap();
         let RdpInputEvent::FastPath(events) = receiver.try_recv().unwrap() else {
             panic!("expected input");
         };
         assert_eq!(
             &events[..],
-            &[FastPathInputEvent::SyncEvent(SynchronizeFlags::empty())]
+            &[
+                FastPathInputEvent::SyncEvent(SynchronizeFlags::empty()),
+                super::super::input::mouse(73, 91, 0x1000, 0),
+                super::super::input::mouse(73, 91, 0x2000, 0),
+                super::super::input::mouse(73, 91, 0x4000, 0),
+            ]
         );
         assert!(controls.keys.is_empty());
+        assert!(controls.buttons.is_empty());
+        assert_eq!(controls.position, (73, 91));
         assert_eq!(controls.owner.as_deref(), Some("page"));
         assert_eq!(controls.epoch, 7);
         assert!(controls.ui_locked);
@@ -982,18 +1203,82 @@ mod tests {
     }
 
     #[test]
-    fn rejected_reset_preserves_local_ui_key_tracking() {
+    fn rejected_reset_preserves_local_input_tracking_and_can_be_retried() {
         let (input, mut receiver) = RdpInputSender::channel(1);
         let mut controls = Controls::default();
         controls.keys.insert((30, false));
+        controls.buttons.insert(0x2000);
+        controls.position = (2, 3);
         send(&input, super::super::input::key(30, false, true)).unwrap();
         assert_eq!(
-            controls.reset_keyboard(&input).unwrap_err().to_string(),
+            controls
+                .reset_input(&input, (73, 91))
+                .unwrap_err()
+                .to_string(),
             "RDP_INPUT_UNAVAILABLE"
         );
         assert!(controls.keys.contains(&(30, false)));
+        assert!(controls.buttons.contains(&0x2000));
+        assert_eq!(controls.position, (2, 3));
         receiver.try_recv().unwrap();
-        controls.reset_keyboard(&input).unwrap();
+        assert!(receiver.try_recv().is_err());
+        controls.reset_input(&input, (73, 91)).unwrap();
         assert!(controls.keys.is_empty());
+        assert!(controls.buttons.is_empty());
+        let RdpInputEvent::FastPath(events) = receiver.try_recv().unwrap() else {
+            panic!("expected input");
+        };
+        assert_eq!(events.len(), 4);
+    }
+
+    #[test]
+    fn explicit_reset_releases_untracked_tool_buttons_without_a_display() {
+        let (input, mut receiver) = RdpInputSender::channel(1);
+        let mut controls = Controls::default();
+        // Tool input does not populate UI tracking, and may remain held after a page closes.
+        controls.reset_input(&input, (41, 59)).unwrap();
+        let RdpInputEvent::FastPath(events) = receiver.try_recv().unwrap() else {
+            panic!("expected input");
+        };
+        let buttons: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                FastPathInputEvent::MouseEvent(mouse) => {
+                    assert!(!mouse.flags.contains(PointerFlags::DOWN));
+                    assert!(!mouse.flags.contains(PointerFlags::MOVE));
+                    assert_eq!((mouse.x_position, mouse.y_position), (41, 59));
+                    Some(mouse.flags.bits())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(buttons, [0x1000, 0x2000, 0x4000]);
+        assert_eq!(controls.owner, None);
+    }
+    #[test]
+    fn resize_requires_the_ready_display_lease_and_valid_dimensions() {
+        let (input, mut receiver) = RdpInputSender::channel(4);
+        let mut owner = Controls {
+            owner: Some("page".into()),
+            epoch: 3,
+            ..Controls::default()
+        };
+        assert!(resize_display(&owner, &input, Some("page"), Some(3), 1024, 768).is_err());
+        owner.ready.insert("page".into());
+        assert!(resize_display(&owner, &input, Some("old"), Some(3), 1024, 768).is_err());
+        assert!(resize_display(&owner, &input, Some("page"), Some(2), 1024, 768).is_err());
+        assert!(resize_display(&owner, &input, Some("page"), Some(3), 401, 768).is_err());
+        assert!(receiver.try_recv().is_err());
+        owner.ui_locked = true;
+        resize_display(&owner, &input, Some("page"), Some(3), 400, 700).unwrap();
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            RdpInputEvent::Resize {
+                width: 400,
+                height: 700,
+                scale_factor: 100,
+                ..
+            }
+        ));
     }
 }

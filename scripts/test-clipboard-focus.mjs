@@ -65,7 +65,7 @@ module.exports = { ...proofBackend, call: (method, params, context) => method ==
   for (let i = 0; i < configs.length; i++) {
     phase = 'connect ' + (i + 1); console.log(phase);
     const location = i === 0 ? 'sidebar' : 'window';
-    const profile = await backend('profiles.save', { ...configs[i], name: 'Clipboard test ' + (i + 1), clipboardSupport: true, passwordAction: 'set', openMode: location, runInBackground: true });
+    const profile = await backend('profiles.save', { ...configs[i], name: 'Clipboard test ' + (i + 1), clipboardSupport: true, passwordAction: 'set', openMode: location });
     await backend('trusts.save', { host: configs[i].host, port: configs[i].port ?? 3389, sha256: pins[i] });
     await backend('profiles.launch', { id: profile.id, revision: profile.revision });
     await main.evaluate(({ id, location }) => gale.plugins.invoke('rdp', 'host.openView', { instanceId: id, location, title: 'Clipboard test' }), { id: profile.id, location });
@@ -83,7 +83,7 @@ module.exports = { ...proofBackend, call: (method, params, context) => method ==
     await pollState(item, 'syncing');
   }
   const [a, b] = resources;
-  const input = (item, actions) => backend('proof.input', { session_id: item.session.id, actions, interval_ms: 80 });
+  const input = (item, actions) => backend('proof.input', { profile_id: item.profile.id, actions, interval_ms: 80 });
   const setRemote = async (item, text) => {
     assert.match(text, /^[a-zA-Z0-9-]+$/);
     await input(item, [{ type: 'hotkey', keys: ['WIN', 'R'] }]);
