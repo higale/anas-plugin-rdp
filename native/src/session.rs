@@ -516,6 +516,9 @@ pub async fn run() -> anyhow::Result<()> {
                         resize_display(&owner, &input, command["page"].as_str(), command["expectedEpoch"].as_u64(), width, height)?;
                         return Ok(Some(json!({"accepted":true})));
                     }
+                    if matches!(method, "downloadStatus" | "downloadStart" | "downloadCancel") {
+                        return Ok(Some(clipboard.as_ref().context("RDP_CLIPBOARD_UNAVAILABLE")?.download_command(method, &command)?));
+                    }
                     if method == "setClipboardActivity" {
                         let active = command["active"].as_bool().context("RDP_CLIPBOARD_UNAVAILABLE")?;
                         let can_publish = command["publish"].as_bool().context("RDP_CLIPBOARD_UNAVAILABLE")?;

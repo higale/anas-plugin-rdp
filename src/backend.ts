@@ -326,6 +326,17 @@ async function execute(method: string, params: unknown, caller: CallContext, sig
     session.profile.adaptiveWindow = profile.adaptiveWindow; session.profile.adaptiveSidebar = profile.adaptiveSidebar;
     return { adaptiveWindow: profile.adaptiveWindow, adaptiveSidebar: profile.adaptiveSidebar };
   }
+  if (['downloadStatus', 'downloadStart', 'downloadCancel'].includes(method)) {
+    if (caller.caller?.instanceId !== owner) throw new Error('RDP_PAGE_OWNER');
+    if (process.platform !== 'darwin' || !session.profile.clipboardSupport) return null;
+    if (session.closed || session.state !== 'connected') throw new Error('RDP_SESSION_CLOSED');
+    if (method === 'downloadStart') {
+      if (typeof input.directory !== 'string' || !isAbsolute(input.directory) || input.directory.length > 32768 || input.directory.includes('\0') || !Number.isSafeInteger(input.revision)) throw new Error('RDP_DOWNLOAD_DIRECTORY');
+      return command(session, method, { directory: input.directory, revision: input.revision });
+    }
+    if (method === 'downloadCancel') return command(session, method, { id: text(input.transferId, 80) });
+    return command(session, method, {});
+  }
   if (method === 'setClipboardEnabled') {
     if (!session.profile.clipboardSupport || session.state !== 'connected' || typeof input.enabled !== 'boolean') throw new Error('RDP_CLIPBOARD_UNAVAILABLE');
     const result = await command(session, 'setClipboardEnabled', { enabled: input.enabled });

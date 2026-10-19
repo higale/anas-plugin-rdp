@@ -1,0 +1,178 @@
+import assert from 'node:assert/strict';
+import { build } from 'esbuild';
+import { readFile, writeFile, appendFile, mkdir, cp, mkdtemp, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { createHash, randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { resolve, join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+
+const root = process.cwd(), host = resolve(root, '../Anas');
+const require = createRequire(join(host, 'package.json'));
+const { _electron: electron } = require('playwright');
+const { expect } = require('playwright/test');
+const { closeElectronTestApplication } = require('./scripts/electron-test-close.cjs');
+const config = JSON.parse(await readFile(join(root, '.local/rdp-test.json'), 'utf8'));
+let pin;
+try {
+  const trust = JSON.parse(await readFile(join(root, '.local/rdp-trust.json'), 'utf8'));
+  if (trust.target_key === createHash('sha256').update(JSON.stringify([config.host, config.port ?? 3389])).digest('hex')) pin = trust.certificate_sha256;
+} catch {}
+if (!pin) {
+  const data = JSON.parse(await readFile(resolve(homedir(), '.galeAnas/db/plugins/rdp/profiles.json'), 'utf8'));
+  pin = data.certificate_trust?.find(item => item.host === config.host && item.port === (config.port ?? 3389))?.sha256;
+}
+assert.ok(pin, 'A previously verified certificate is required.');
+const directory = await mkdtemp(join(tmpdir(), 'anas-rdp-download-'));
+let app, phase = 'prepare', cleanupRemote;
+const fileMiB = Number(process.env.RDP_TEST_FILE_MIB ?? 16);
+assert.ok(Number.isInteger(fileMiB) && fileMiB >= 8 && fileMiB <= 128);
+let clipboardFormats;
+await mkdir(join(root,'tmp/download-host-proof'),{recursive:true});
+try {
+  const pkg = join(directory, 'package');
+  await mkdir(pkg);
+  await build({ entryPoints: [join(root, 'src/ui/app.ts')], bundle: true, format: 'esm', platform: 'browser', outfile: join(pkg, 'app.js') });
+  await build({ entryPoints: [join(root, 'src/backend.ts')], bundle: true, format: 'cjs', platform: 'node', outfile: join(pkg, 'backend.cjs') });
+  for (const file of ['index.html', 'style.css']) await cp(join(root, 'src/ui', file), join(pkg, file));
+  await cp(join(root, 'lang'), join(pkg, 'lang'), { recursive: true });
+  await cp(join(root, 'skills'), join(pkg, 'skills'), { recursive: true });
+  await cp(join(root, 'assets'), join(pkg, 'assets'), { recursive: true });
+  const native = join(pkg, 'native', process.platform + '-' + process.arch);
+  await mkdir(native, { recursive: true });
+  const binary = 'anas-rdp-session' + (process.platform === 'win32' ? '.exe' : '');
+  await cp(join(root, 'dist/native', process.platform + '-' + process.arch, binary), join(native, binary));
+  if (process.platform === 'darwin') execFileSync('codesign', ['--force', '--sign', '-', join(native, binary)], { stdio: 'ignore' });
+  await appendFile(join(pkg, 'backend.cjs'), `
+const downloadTestCall = module.exports.call;
+module.exports = { ...module.exports, call: (method, params, context) => method === 'test.input' ? module.exports.tools.input(params, { ...context, deadline: Date.now() + 120000 }) : downloadTestCall(method, params, context) };
+`);
+  await writeFile(join(pkg, 'PLUGIN.json'), JSON.stringify({ ...JSON.parse(await readFile(join(root, 'dist/PLUGIN.json'), 'utf8')),
+    tools: JSON.parse(await readFile(join(root, 'tools.json'), 'utf8')) }));
+  await mkdir(join(directory, 'documents'));
+  await writeFile(join(directory, 'package.json'), JSON.stringify({ name: 'anas-rdp-test', version: '1.0.0', main: 'main.cjs' }));
+  await cp(join(host, 'data'), join(directory, 'data'), { recursive: true });
+  await writeFile(join(directory, 'main.cjs'), `globalThis.__writeTestFile=(file,text)=>require('node:fs').writeFileSync(file,text); const {app,dialog}=require('electron'); app.setAppPath(${JSON.stringify(host)}); app.setPath('documents',${JSON.stringify(join(directory, 'documents'))}); dialog.showErrorBox=()=>app.exit(1); require(${JSON.stringify(join(host, 'out/main/index.js'))});`);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE; delete env.ELECTRON_RENDERER_URL;
+  app = await electron.launch({ executablePath: require('electron'), args: [directory, '--data-dir', join(directory, 'data-profile')], cwd: host, env, timeout: 45000 });
+  clipboardFormats = await app.evaluate(({clipboard}) => clipboard.availableFormats().map(format=>[format,clipboard.readBuffer(format).toString('base64')]));
+  const main = await app.firstWindow();
+  await main.locator('[data-agent-composer-input]').waitFor({ timeout: 45000 });
+  await main.evaluate(() => gale.config.updateSettings({ language: 'en', theme: 'dark' }));
+  await app.evaluate(({ dialog }, file) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] }); }, join(pkg, 'PLUGIN.json'));
+  await main.evaluate(() => gale.plugins.install());
+  const backend = (method, params) => main.evaluate(({ method, params }) => gale.plugins.invoke('rdp', 'backend.call', { method, params, concurrent: method.startsWith('server.') }), { method, params });
+  console.log('previous phase complete:', phase); phase = 'connect';
+  const profile = await backend('profiles.save', { ...config, name: 'Handoff verification', clipboardSupport: true, passwordAction: 'set', openMode: 'sidebar' });
+  await backend('trusts.save', { host: config.host, port: config.port ?? 3389, sha256: pin });
+  await backend('profiles.launch', { id: profile.id, revision: profile.revision });
+  await main.evaluate(id => gale.plugins.invoke('rdp', 'host.openView', { instanceId: id, location: 'sidebar', title: 'Handoff verification' }), profile.id);
+  const frameIn = page => page.frames().find(frame => frame.url().startsWith('anas-plugin://rdp/'));
+  let frame = frameIn(main);
+  await expect(frame.locator('#status')).toHaveText('Connected', { timeout: 40000 });
+  const input = actions => backend('test.input', { profile_id: profile.id, actions, interval_ms: 80 });
+  const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const copyId = 'anas-download-' + randomUUID();
+  const remoteRoot = "$env:TEMP+'\\" + copyId + "'";
+  async function remote(script) {
+    await input([{type:'press',key:'ESC'},{type:'hotkey',keys:['WIN','R']}]); await pause(700);
+    await input([{type:'text',text:'cmd.exe'},{type:'press',key:'ENTER'}]); await pause(2500);
+    await input([{type:'text',text:'powershell.exe -NoProfile -STA -WindowStyle Hidden -EncodedCommand '+Buffer.from("$ErrorActionPreference='Stop'; try {"+script+"} catch {Set-Clipboard ('download-setup-error:'+ $_.Exception.Message)}",'utf16le').toString('base64')+' & exit'},{type:'press',key:'ENTER'}]);
+  }
+  cleanupRemote = () => remote(`Remove-Item -LiteralPath (${remoteRoot}) -Recurse -Force -ErrorAction SilentlyContinue; Set-Clipboard 'download-test-done'`);
+  const destination = join(directory, 'downloads'); await mkdir(destination);
+  await expect(frame.locator('#clipboard')).toBeEnabled({timeout:15000});
+  await frame.locator('#clipboard').click();
+  await expect(frame.locator('#clipboard')).toHaveAttribute('aria-pressed','true');
+  console.log('previous phase complete:', phase); phase = 'remote-copy';
+  await remote(`Add-Type -AssemblyName System.Windows.Forms; $d=${remoteRoot}; New-Item -ItemType Directory -Path ($d+'\\子目录') -Force | Out-Null; [IO.File]::WriteAllText($d+'\\子目录\\你好🐟.txt','download 🐟'); [IO.File]::WriteAllBytes($d+'\\empty',([byte[]]@())); $s=[IO.File]::Create($d+'\\large.bin'); $b=New-Object byte[] 1048576; 1..${fileMiB} | ForEach-Object {$s.Write($b,0,$b.Length)}; $s.Close(); $list=New-Object System.Collections.Specialized.StringCollection; [void]$list.Add($d); [Windows.Forms.Clipboard]::SetFileDropList($list)`);
+  await main.bringToFront(); await frame.locator('#title').click();
+  console.log('copy activity:', (await frame.evaluate(()=>anas.getContext())).view.activity);
+  try { await expect(frame.locator('#download')).toBeVisible({timeout:30000}); } catch (error) {
+    const clip = await app.evaluate(({clipboard})=>clipboard.readText());
+    if (clip.startsWith('download-setup-error:')) console.error('Remote test data preparation failed.');
+    throw error;
+  }
+  const downloadStatus = pageFrame => pageFrame.evaluate(async owner => {
+    const current = await anas.backend.call('find',{owner});
+    return current ? anas.backend.call('downloadStatus',{owner,id:current.id}) : null;
+  }, profile.id);
+  assert.deepEqual(await import('node:fs/promises').then(fs=>fs.readdir(destination)),[]);
+  const before = await downloadStatus(frame); assert.ok(before.offer.count >= 4);
+  assert.equal(before.transfer,null);
+  await app.evaluate(({dialog}, directory) => { dialog.showOpenDialog = async (...args) => { globalThis.downloadDialog = args.at(-1); return {canceled:false,filePaths:[directory]}; }; },destination);
+  console.log('previous phase complete:', phase); phase = 'sidebar-download';
+  await frame.locator('#download').click();
+  await expect(frame.locator('#download-status')).toBeVisible();
+  await expect(frame.locator('#download-cancel')).toBeVisible();
+  assert.deepEqual(await app.evaluate(()=>globalThis.downloadDialog.properties),['openDirectory','createDirectory']);
+  const started = await downloadStatus(frame); assert.equal(started.transfer.state,'running');
+  await mkdir(join(root,'tmp/download-host-proof'),{recursive:true});
+  await frame.locator('#download-status').screenshot({path:join(root,'tmp/download-host-proof/progress.png')});
+  console.log('previous phase complete:', phase); phase = 'handoff';
+  await remote("Set-Clipboard 'replacement-during-download'");
+  await expect.poll(async()=> (await downloadStatus(frame))?.offer,{timeout:10000}).toBeNull();
+  const nextWindow = app.waitForEvent('window');
+  await frame.evaluate(()=>{void anas.moveView('window');});
+  const detached = await nextWindow; await detached.waitForLoadState();
+  await expect.poll(()=>!!frameIn(detached),{timeout:30000}).toBe(true);
+  frame = frameIn(detached);
+  await expect(frame.locator('#download-status')).toBeVisible({timeout:30000});
+  await expect.poll(async()=> (await downloadStatus(frame))?.transfer?.state,{timeout:190000}).toBe('completed');
+  const completed = (await downloadStatus(frame)).transfer;
+  assert.equal(completed.id,started.transfer.id);
+  const fs = await import('node:fs/promises');
+  assert.equal(completed.path, destination);
+  assert.deepEqual(await fs.readdir(destination), [copyId], 'No generated wrapper directory');
+  const actual = join(destination,copyId);
+  assert.equal((await fs.stat(join(actual,'large.bin'))).size,fileMiB*1048576);
+  assert.equal(createHash('sha256').update(await readFile(join(actual,'large.bin'))).digest('hex'),createHash('sha256').update(Buffer.alloc(fileMiB*1048576)).digest('hex'));
+  assert.equal(await readFile(join(actual,'子目录','你好🐟.txt'),'utf8'),'download 🐟');
+  assert.equal((await fs.stat(join(actual,'empty'))).size,0);
+  const revealReceipt = join(directory,'revealed.json');
+  await app.evaluate(({shell},receipt)=>{ shell.showItemInFolder=path=>{globalThis.__writeTestFile(receipt,JSON.stringify(path));}; },revealReceipt);
+  await frame.locator('#download-reveal').click();
+  await expect.poll(async()=>JSON.parse(await readFile(revealReceipt,'utf8').catch(()=> 'null'))).toBe(completed.path);
+  await frame.locator('#download-status').screenshot({path:join(root,'tmp/download-host-proof/completed.png')});
+  console.log('previous phase complete:', phase); phase = 'conflict';
+  await remote(`Add-Type -AssemblyName System.Windows.Forms; $list=New-Object System.Collections.Specialized.StringCollection; [void]$list.Add((${remoteRoot})); [Windows.Forms.Clipboard]::SetFileDropList($list)`);
+  await detached.bringToFront(); await frame.locator('#download-status').click();
+  await expect(detached.getByRole('button',{name:/Download remote files/})).toBeVisible({timeout:30000});
+  await detached.getByRole('button',{name:/Download remote files/}).click();
+  await expect.poll(async()=> (await downloadStatus(frame))?.transfer?.error,{timeout:10000}).toBe('RDP_DOWNLOAD_EXISTS');
+  await expect(frame.locator('#download-error')).toContainText('same name');
+  assert.equal((await fs.stat(join(actual,'large.bin'))).size,fileMiB*1048576);
+  console.log('previous phase complete:', phase); phase = 'cancel';
+  const retryDestination = join(directory,'retry-downloads'); await mkdir(retryDestination);
+  await writeFile(join(retryDestination,'existing.txt'),'preserve');
+  await app.evaluate(({dialog},folder)=>{dialog.showOpenDialog=async()=>({canceled:false,filePaths:[folder]});},retryDestination);
+  await detached.getByRole('button',{name:/Download remote files/}).click();
+  await expect.poll(async()=> (await downloadStatus(frame))?.transfer?.bytes ?? 0,{timeout:30000}).toBeGreaterThan(0);
+  await frame.locator('#download-cancel').click();
+  await expect.poll(async()=> (await downloadStatus(frame))?.transfer?.state,{timeout:10000}).toBe('cancelled');
+  assert.deepEqual(await fs.readdir(destination),[copyId]);
+  assert.deepEqual(await fs.readdir(retryDestination),['existing.txt']);
+  assert.equal(await readFile(join(retryDestination,'existing.txt'),'utf8'),'preserve');
+  console.log('previous phase complete:', phase); phase = 'disconnect-cleanup';
+  await detached.getByRole('button',{name:/Download remote files/}).click();
+  await expect.poll(async()=> (await downloadStatus(frame))?.transfer?.state,{timeout:10000}).toBe('running');
+  await expect.poll(async()=> (await downloadStatus(frame))?.transfer?.bytes ?? 0,{timeout:30000}).toBeGreaterThan(0);
+  await backend('server.close',{profile_id:profile.id});
+  assert.deepEqual(await fs.readdir(destination),[copyId]);
+  assert.deepEqual(await fs.readdir(retryDestination),['existing.txt']);
+  assert.equal(await readFile(join(retryDestination,'existing.txt'),'utf8'),'preserve');
+  await backend('server.open',{profile_id:profile.id,state:'foreground',location:'sidebar'});
+  await expect.poll(async()=> { const session=await backend('find',{owner:profile.id}); return session && (await backend('status',{owner:profile.id,id:session.id})).state; },{timeout:40000}).toBe('connected');
+  console.log('previous phase complete:', phase); phase = 'remote-cleanup';
+  await cleanupRemote(); cleanupRemote = undefined;
+  await pause(1000);
+  await backend('server.close',{profile_id:profile.id});
+  console.log(`PASS: real macOS ${fileMiB} MiB direct download SHA256, same-name conflict, Unicode/emoji folders, empty files, clipboard replacement, sidebar-to-window handoff, titlebar download, cancellation/disconnect cleanup, directory picker contract and Finder routing.`);
+} catch (error) {
+  let message=String(error?.stack??error);
+  for (const value of [config.host,config.username,config.password]) if(value) message=message.split(value).join('[redacted]');
+  for (const page of app?.context().pages() ?? []) { await page.screenshot({ path: join(root,'tmp/download-host-proof/failure.png') }).catch(()=>{}); }
+  console.error('Download test phase:',phase,message); process.exitCode=1;
+} finally { if (cleanupRemote) await cleanupRemote().catch(()=>{});
+  if (clipboardFormats && app) await app.evaluate(({clipboard},formats)=>{ clipboard.clear(); for(const [format,bytes] of formats) clipboard.writeBuffer(format,Buffer.from(bytes,'base64')); },clipboardFormats).catch(()=>{});
+  await closeElectronTestApplication(app); await rm(directory,{recursive:true,force:true}); }

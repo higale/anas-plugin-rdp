@@ -4,7 +4,7 @@
 
 截图默认仅返回图片；传入 `save: true` 可同时保存到宿主数据目录下的 `tmp/anas-plugin-rdp/screenshots/`，成功返回绝对路径 `saved_path`，失败返回 `save_error` 并保留图片。临时文件不进入备份，可随宿主清理删除；此功能需要提供 `tempDirectory` 的宿主。
 
-需要 **Anas 3.3.13 或更新版本**（插件 API 2），提供本插件使用的标题栏菜单、窗口状态与准备阶段适配接口。请先升级宿主，再安装插件。
+需要 **Anas 4.0.4 或更新版本**（插件 API 2），提供本插件使用的标题栏菜单、窗口状态、准备阶段适配、目录选择与文件定位接口。请先升级宿主，再安装插件。
 
 桌面显示远程光标，模型操作时也可观察位置变化。模型移动仅在本地平滑显示，不增加远端鼠标事件，不延迟工具或改变截图；服务器编辑页可勾选「禁用鼠标动画」，默认不勾选。手动移动即时跟随，移出后保留最后位置，不发送归位或隐藏操作；锁定本地输入仍显示远程更新。光标随桌面缩放并跟随远端形状，位置未知或远端要求隐藏时不显示。
 
@@ -54,7 +54,7 @@ Windows 支持文件和文件夹双向复制粘贴，复制时仅交换目录信
 
 Screenshots return images by default. With `save: true`, the same PNG is also saved under the host data directory at `tmp/anas-plugin-rdp/screenshots/`; metadata includes an absolute `saved_path` on success or `save_error` while retaining the image on failure. These temporary files are excluded from backups and may be removed by host cleanup. Saving requires a host that provides `tempDirectory`.
 
-Requires **Anas 3.3.13 or later** (plugin API 2), which provides the titlebar menus, window state and fitting-before-activation APIs used by this plugin. Upgrade the host before installing the plugin.
+Requires **Anas 4.0.4 or later** (plugin API 2), which provides the titlebar menus, window state, fitting-before-activation, directory selection and file reveal APIs used by this plugin. Upgrade the host before installing the plugin.
 
 The desktop displays the remote cursor, including movement from model tools. Model moves animate locally without adding remote input, delaying tools or changing screenshots. The server editor offers “Disable mouse animation”, unchecked by default. Local movement appears immediately; leaving the desktop retains the last position without sending a reset or hide operation. Locking local input still allows remote cursor updates. The cursor follows desktop scaling and server-provided shapes; unknown positions and server-hidden cursors are not drawn.
 
@@ -99,3 +99,9 @@ The desktop toolbar and separate window titlebar provide Lock local input. When 
 Clipboard support is off by default for each server; enabling it reveals the clipboard toggle. Each new connection starts with sharing off. Connections can enable sharing independently, and moving or retaining a desktop in the background preserves its switch. Only the active desktop synchronizes new content: a separate window must be foreground; a sidebar desktop must be selected and its tab, content or toolbar must be the current interaction region. Clicking the chat area, hiding the sidebar or switching tabs pauses synchronization; hovering does not activate it. Inactive connections retain published copies for pasting and finish existing file transfers. A newly active connection takes over new synchronization without disabling the other switches. Manually disabling sharing still waits for file transfers to finish and does not retract copied text. Tooltips indicate syncing, waiting for activation or finishing a transfer. Clipboard availability follows its own channel state. When the desktop is visible but CLIPRDR negotiation is incomplete, the disabled switch shows “Clipboard channel initializing”. Protocol readiness enables the switch; sharing still requires an explicit click.
 
 Windows supports bidirectional file and folder copy/paste: copying exchanges metadata, and pasting reads file contents on demand. Remote files are not downloaded in advance, and source files are never moved or deleted. Intel macOS tests cover bidirectional text, local-folder uploads, active-connection switching, and transfer cancellation/disconnection. An upload may remain busy for about a minute after cancellation. Direct remote-file paste into Finder is not implemented; Windows multi-connection switching and local Explorer paste/cancel still need verification. Images and rich text are not supported.
+
+### macOS 文件下载 / File downloads
+
+macOS 开启共享后，远端复制文件／文件夹会显示下载图标；悬停可查看项目数量。点击选择本机保存目录，才开始分块下载。直接保存到所选目录，保留远端文件夹原有结构；若已有同名文件或文件夹则提示冲突，不覆盖、不合并；进度提示支持取消，完成后可在 Finder 中显示。切换标签、关闭桌面或侧栏／窗口交接不停止后台下载；明确断开连接或停止插件则结束下载并清理本次部分文件。清理失败会提示保留目录。需要提供目录选择和文件定位接口的新版 Anas；不支持跨应用重启恢复任务。
+
+On macOS, sharing reveals a download icon when remote files or folders are copied; its tooltip shows the item count. File contents are read in chunks only after you click and choose a local destination. Downloads save directly into the selected directory, preserving the original remote folder structure. Existing files or folders with the same name cause a conflict error; they are never replaced or merged. The progress panel supports cancellation and Show in Finder on completion. Switching tabs, closing the desktop, or moving between sidebar and window keeps the download running in the background. Explicitly disconnecting or stopping the plugin ends the download and removes partial files; cleanup failures identify the retained folder. This requires an updated Anas with directory selection and file reveal APIs. Transfers do not resume after an application restart.

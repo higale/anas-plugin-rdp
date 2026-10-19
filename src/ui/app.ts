@@ -12,6 +12,8 @@ type Toolbar = { status?: { label: string; tone: 'neutral' | 'success' | 'warnin
 declare global {
   interface Window {
     anas: {
+      selectDirectory(options?: { title?: string }): Promise<string | null>;
+      showItemInFolder(path: string): Promise<void>;
       getContext(): Promise<PageContext>;
       registerLifecycle(handlers: { prepare(input: LifecycleInput): Promise<Restore>; activate(input: LifecycleInput): Promise<void>; resume(input: LifecycleInput): Promise<void>; dispose(input: LifecycleInput): Promise<void> }): void;
       ready(): Promise<void>;
@@ -64,6 +66,80 @@ let textInputBusy = false;
 let clipboardEnabled = false;
 let clipboardState = 'initializing';
 let clipboardPending = false;
+type DownloadState = { offer: { revision: number; count: number } | null; transfer: { id: string; state: 'running' | 'completed' | 'failed' | 'cancelled'; bytes: number; total: number | null; completed: number; count: number; path?: string; error?: string } | null };
+let downloadState: DownloadState | null = null;
+let downloadSession = '';
+let downloadPending = false;
+let downloadPolling = false;
+let dismissedDownload = '';
+let downloadIssue: string | undefined;
+let downloadRevision = 0;
+let downloadTimer: ReturnType<typeof setInterval> | undefined;
+function downloadLabel() {
+  const task = downloadState?.transfer;
+  return task?.state === 'running' ? t('download.progress', { bytes: formatBytes(task.bytes), total: task.total === null ? '…' : formatBytes(task.total) }) : t('download.action', { count: downloadState?.offer?.count ?? 0 });
+}
+function formatBytes(bytes: number) { return bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / 1048576).toFixed(1)} MiB`; }
+function renderDownload() {
+  const task = downloadState?.transfer;
+  const visible = !!downloadIssue || (!!task && task.id !== dismissedDownload);
+  element('download-status').hidden = !visible;
+  if (!visible) return;
+  element('download-message').textContent = downloadIssue ? (downloadIssue.includes('RDP_DOWNLOAD_HOST') ? t('download.update_host') : downloadError(downloadIssue)) : task?.state === 'running' ? downloadLabel() : t('download.' + task?.state);
+  element('download-error').textContent = task && (task.state === 'failed' || task.error === 'RDP_DOWNLOAD_CLEANUP') ? downloadError(task.error) : '';
+  const progress = element<HTMLProgressElement>('download-progress');
+  progress.hidden = task?.state !== 'running';
+  if (task?.total === null || !task) progress.removeAttribute('value');
+  else { progress.max = task.total || task.count; progress.value = task.total ? task.bytes : task.completed; }
+  const cancel = element<HTMLButtonElement>('download-cancel');
+  cancel.hidden = task?.state !== 'running'; cancel.disabled = downloadPending; cancel.textContent = t('actions.cancel');
+  const reveal = element<HTMLButtonElement>('download-reveal');
+  reveal.hidden = !task?.path; reveal.textContent = t('download.reveal');
+  const dismiss = element<HTMLButtonElement>('download-dismiss');
+  dismiss.hidden = task?.state === 'running'; dismiss.textContent = t('download.dismiss');
+}
+function downloadError(error?: string) {
+  for (const [code, key] of Object.entries({ RDP_DOWNLOAD_REVEAL: 'reveal_error', RDP_DOWNLOAD_CHANGED: 'changed', RDP_DOWNLOAD_DIRECTORY: 'directory_error', RDP_DOWNLOAD_READ: 'read_error', RDP_DOWNLOAD_WRITE: 'write_error', RDP_DOWNLOAD_EXISTS: 'exists_error', RDP_DOWNLOAD_FILES: 'files_error', RDP_DOWNLOAD_CLEANUP: 'cleanup_error', RDP_DOWNLOAD_BUSY: 'busy' })) {
+    if (error?.includes(code)) return t('download.' + key);
+  }
+  return t('download.failed');
+}
+async function refreshDownload() {
+  if (downloadPolling || downloadPending || closing || handoff) return;
+  const revision = downloadRevision;
+  const current = session;
+  if (!current || !connectionProfile?.clipboardSupport) { downloadState = null; downloadSession = ''; renderDownload(); return; }
+  if (downloadSession !== current.id) { downloadState = null; downloadSession = current.id; downloadIssue = undefined; dismissedDownload = ''; renderDownload(); }
+  if (!connected) {
+    if (downloadState?.transfer?.state === 'running') { downloadState.transfer.state = 'failed'; downloadState.transfer.error = 'RDP_SESSION_CLOSED'; renderDownload(); }
+    return;
+  }
+  downloadPolling = true;
+  try {
+    const result = await window.anas.backend.call('downloadStatus', { owner, id: current.id }) as DownloadState | null;
+    if (session !== current || closing || handoff || revision !== downloadRevision) return;
+    downloadState = result; renderDownload(); presentation();
+  } catch {
+    if (session === current && revision === downloadRevision && downloadState?.transfer?.state === 'running') {
+      downloadState.transfer.state = 'failed'; downloadState.transfer.error = 'RDP_SESSION_CLOSED'; renderDownload();
+    }
+  } finally { downloadPolling = false; }
+}
+async function startDownload() {
+  const current = session, offer = downloadState?.offer;
+  if (!current || !offer || downloadPending || downloadState?.transfer?.state === 'running' || handoff || closing || !connected) return;
+  downloadPending = true; downloadIssue = undefined; ++downloadRevision; presentation();
+  try {
+    if (!window.anas.selectDirectory) throw new Error('RDP_DOWNLOAD_HOST');
+    const directory = await window.anas.selectDirectory({ title: t('download.select_directory') });
+    if (!directory || session !== current || handoff || closing || !connected) return;
+    const result = await window.anas.backend.call('downloadStart', { owner, id: current.id, revision: offer.revision, directory }) as DownloadState;
+    if (session === current && !closing) { downloadState = result; dismissedDownload = ''; }
+  } catch (error) {
+    if (!closing && session === current) downloadIssue = String(error);
+  } finally { downloadPending = false; if (!closing) { renderDownload(); presentation(); } }
+}
+
 let clipboardErrorSeen = '';
 let disconnecting = false;
 let savingTrust = false;
@@ -346,6 +422,7 @@ function connectionActions(windowActions = false): Toolbar['actions'] {
   return [
     { id: 'ui-lock', label: t(uiLocked ? 'actions.unlock_ui' : 'actions.lock_ui'), icon: uiLocked ? 'assets/lock.svg' : 'assets/lock-open.svg', pressed: uiLocked, disabled: !connected || uiLockPending || handoff || !ready },
     ...(connectionProfile?.clipboardSupport ? [{ id: 'clipboard', label: clipboardState === 'initializing' ? t('clipboard.initializing') : clipboardEnabled ? `${t('actions.disable_clipboard')} · ${t('clipboard.' + clipboardState)}` : t('actions.enable_clipboard'), icon: 'assets/clipboard.svg', pressed: clipboardEnabled, disabled: !connected || clipboardState === 'initializing' || clipboardPending || handoff || !ready }] : []),
+    ...(connected && clipboardEnabled && (downloadState?.offer || downloadState?.transfer?.state === 'running') ? [{ id: 'download', label: downloadLabel(), icon: 'assets/download.svg', disabled: downloadPending || downloadState.transfer?.state === 'running' || handoff || !ready }] : []),
     { id: 'reset-input', label: t('actions.reset_input'), icon: 'assets/input-reset.svg', disabled: !connected || inputResetPending || handoff || !ready },
     { id: 'input-text', label: t('actions.input_text'), icon: 'assets/keyboard.svg', disabled: !connected || uiLocked || handoff || !ready },
     ...(location === 'window' && !dynamicResolutionAvailable() ? [{ id: 'fit-window', label: t('actions.fit_window'), icon: 'assets/scan.svg',
@@ -367,6 +444,7 @@ function presentation() {
   element('connection-header').hidden = instanceId !== 'main' && location === 'window' && toolbarReady;
   element('connection-name').hidden = !element('connection-header').hidden;
   element('move-window').hidden = instanceId === 'main' || location !== 'sidebar';
+  element('download').hidden = !connected || !clipboardEnabled || (!downloadState?.offer && downloadState?.transfer?.state !== 'running');
   element('resolution-menu').hidden = instanceId === 'main' || !connected || !dynamicResolutionAvailable();
   element('fit-window').hidden = instanceId === 'main' || location !== 'window' || !!dynamicResolutionAvailable();
   for (const action of connectionActions()) {
@@ -988,6 +1066,20 @@ async function moveProfile(id: string, direction: -1 | 1) {
 for (const [id, direction] of [['up', -1], ['down', 1]] as const) element(id).addEventListener('click', () => {
   if (selected) void moveProfile(selected.id, direction);
 });
+element('download').addEventListener('click', () => void startDownload());
+element('download-cancel').addEventListener('click', async () => {
+  const current = session, task = downloadState?.transfer;
+  if (!current || !task || task.state !== 'running' || downloadPending) return;
+  downloadPending = true; ++downloadRevision; renderDownload();
+  try { await window.anas.backend.call('downloadCancel', { owner, id: current.id, transferId: task.id }); }
+  catch (error) { if (!closing) downloadIssue = String(error); }
+  finally { downloadPending = false; if (!closing) { renderDownload(); await refreshDownload(); } }
+});
+element('download-reveal').addEventListener('click', () => {
+  const path = downloadState?.transfer?.path;
+  if (path) void window.anas.showItemInFolder(path).catch(() => { downloadIssue = 'RDP_DOWNLOAD_REVEAL'; renderDownload(); });
+});
+element('download-dismiss').addEventListener('click', () => { dismissedDownload = downloadState?.transfer?.id ?? ''; downloadIssue = undefined; renderDownload(); });
 element('clipboard').addEventListener('click', () => void toggleClipboard());
 element('ui-lock').addEventListener('click', () => void toggleUiLock());
 element('reset-input').addEventListener('click', () => void resetInput());
@@ -1071,7 +1163,7 @@ function disposePage() {
   adaptiveResolution.dispose();
   clearTimeout(windowStateTimer);
   closeContextMenu();
-  closing = true; releaseViewListener?.(); releaseToolbarListener?.(); clearInterval(infoTimer); clearInterval(launchTimer); clearInterval(sessionTimer);
+  closing = true; releaseViewListener?.(); releaseToolbarListener?.(); clearInterval(infoTimer); clearInterval(launchTimer); clearInterval(sessionTimer); clearInterval(downloadTimer);
   desktop?.dispose(); desktop = undefined;
 }
 window.addEventListener('pagehide', disposePage);
@@ -1155,6 +1247,7 @@ function translateTrust() {
 }
 function translate() {
   textInput.render();
+  renderDownload();
   const labels: Record<string, string> = { name: 'name', 'open-mode': 'open_mode', 'clipboard-support': 'clipboard_support', 'disable-mouse-animation': 'disable_mouse_animation', 'adaptive-window': 'adaptive_window', 'adaptive-sidebar': 'adaptive_sidebar', 'remember-password': 'remember_password', 'session-remember-password': 'remember_password', host: 'host', port: 'port', username: 'username', domain: 'domain', password: 'password', resolution: 'resolution', 'desktop-width': 'desktop_width', 'desktop-height': 'desktop_height' };
   for (const [id, key] of Object.entries(labels)) document.querySelector('[data-label="' + id + '"]')!.textContent = t('fields.' + key);
   const buttons = { 'add-server': 'actions.add_server', 'cancel-edit': 'actions.cancel', 'confirm-delete': 'actions.delete', 'cancel-delete': 'actions.cancel', 'retry-profiles': 'actions.retry', 'reload-conflict': 'actions.reload', save: 'actions.save', 'mode-sidebar': 'modes.sidebar', 'mode-window': 'modes.window', 'accept-certificate': 'certificate.accept' };
@@ -1222,6 +1315,7 @@ try {
     if (size) { await selectResolution(size); return; }
     if (id === 'adaptive-resolution') { await toggleAdaptive(); return; }
     if (id === 'fit-window') { await fitDesktopWindow(true); return; }
+    if (id === 'download') { void startDownload(); return; }
     if (id === 'clipboard') { await toggleClipboard(); return; }
     if (id === 'ui-lock') { await toggleUiLock(); return; }
     if (id === 'reset-input') { await resetInput(); return; }
@@ -1288,6 +1382,7 @@ try {
   if (instanceId !== 'main') { launchTimer = setInterval(() => { void checkLaunch(); }, 1000); }
   await window.anas.ready();
   if (instanceId === 'main') sessionTimer = setInterval(() => { if (!handoff && !closing) void refreshSessions().catch(() => undefined); }, 1000);
+  if (instanceId !== 'main') { await refreshDownload(); downloadTimer = setInterval(() => { void refreshDownload(); }, 750); }
   infoTimer = setInterval(() => { void syncInfo().catch(() => {}); }, 5000);
   window.addEventListener('focus', () => {
     void syncInfo().catch(() => {});

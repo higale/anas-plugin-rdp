@@ -83,6 +83,8 @@ async function fixture(t, options = {}) {
   let lifecycle;
   const context = { panelId: "panel", pageId: "page", location: info.view.location, windowMode: info.view.windowMode, windowPlacement: info.view.windowPlacement, viewport: info.view.viewport, phase: "preparing", restoreState: options.restore ?? null, view: { content: { instanceId: info.view.instanceId } } };
   window.anas = {
+    selectDirectory: async () => options.selectDirectory?.() ?? null,
+    showItemInFolder: async path => { calls.push({ method: 'showItemInFolder', params: path }); },
     getContext: async () => context,
     registerLifecycle: handlers => { lifecycle = handlers; },
     ready: async () => { await lifecycle.activate({ signal: new window.AbortController().signal, context }); context.phase = 'active'; viewListener?.(info.view); },
@@ -99,6 +101,7 @@ async function fixture(t, options = {}) {
     data: { get: options.get ?? (async () => null), set: options.set ?? (async () => {}) },
     backend: { call: async (method, params) => {
       calls.push({ method, params });
+      if (method.startsWith('download')) return options.download?.(method, params) ?? null;
       if (method === 'profiles.beginEdit' || method === 'profiles.endEdit') return null;
       if (options.store && (method.startsWith('profiles.') || method.startsWith('trusts.'))) return options.store.call(method, params);
       if (method === 'runtime.state') return { sessions: options.sessions?.() ?? [], openProfiles: options.openProfiles?.() ?? [], editingProfiles: options.editingProfiles?.() ?? [] };
@@ -2225,4 +2228,59 @@ test('failed text delivery and page handoff retain acknowledged progress without
   assert.equal(target.element('text-input-content').value, 'x'.repeat(300));
   assert.equal(target.element('text-input-remaining').value, 'x'.repeat(172));
   assert.equal(target.calls.some(call => call.method === 'inputText'), false);
+});
+
+for (const location of ['sidebar', 'window']) test(`explicit clipboard download in ${location} shares status, cancellation and Finder action`, async t => {
+  let state = { offer: { revision: 10, count: 3 }, transfer: null };
+  let selected = false;
+  const ui = await fixture(t, { location, profile: { clipboardSupport: true }, selectDirectory: async () => { selected = true; return '/chosen'; }, download: async (method, params) => {
+    if (method === 'downloadStart') { assert.equal(params.directory, '/chosen'); assert.equal(params.revision, 10); state.transfer = { id: 'task', state: 'running', bytes: 10, total: 100, count: 3, completed: 0 }; }
+    if (method === 'downloadCancel') { assert.equal(params.transferId, 'task'); state.transfer.state = 'cancelled'; }
+    return JSON.parse(JSON.stringify(state));
+  } });
+  ui.submit(); await until(() => ui.element('status').textContent === 'Connected');
+  ui.element('clipboard').click();
+  await until(() => !ui.element('download').hidden);
+  assert.match(ui.element('download').title, /3 items/);
+  assert.equal(selected, false); assert.equal(ui.calls.some(call => call.method === 'downloadStart'), false);
+  if (location === 'window') await ui.action('download'); else ui.element('download').click();
+  await until(() => !ui.element('download-cancel').hidden);
+  assert.equal(ui.element('download-progress').value, 10);
+  assert.equal(ui.element('download').disabled, true);
+  ui.element('download-cancel').click();
+  await until(() => ui.element('download-message').textContent === 'Download cancelled');
+  assert.equal(ui.element('download-cancel').hidden, true);
+  state.transfer = { ...state.transfer, state: 'completed', bytes: 100, path: '/chosen' };
+  await until(() => !ui.element('download-reveal').hidden);
+  ui.element('download-reveal').click();
+  await until(() => ui.calls.some(call => call.method === 'showItemInFolder' && call.params === '/chosen'));
+  ui.element('download-dismiss').click(); assert.equal(ui.element('download-status').hidden, true);
+});
+
+test('directory cancellation and changed remote metadata never silently start a download', async t => {
+  let chosen = null;
+  const ui = await fixture(t, { profile: { clipboardSupport: true }, selectDirectory: async () => chosen, download: async method => {
+    if (method === 'downloadStart') throw Error('RDP_DOWNLOAD_CHANGED');
+    return { offer: {revision: 10, count: 1}, transfer: null };
+  } });
+  ui.submit(); await until(() => ui.element('status').textContent === 'Connected'); ui.element('clipboard').click();
+  await until(() => !ui.element('download').hidden);
+  await ui.action('download'); await until(() => !ui.element('download').disabled); assert.equal(ui.calls.some(call => call.method === 'downloadStart'), false);
+  chosen = '/chosen'; await ui.action('download');
+  await until(() => !ui.element('download-status').hidden);
+  assert.match(ui.element('download-message').textContent, /clipboard changed/);
+  ui.element('download-dismiss').click(); assert.equal(ui.element('download-status').hidden, true);
+});
+
+
+test('moving a page while the directory picker is open cannot start a late download from that page', async t => {
+  const selection = deferred();
+  const ui = await fixture(t, { profile: { clipboardSupport: true }, selectDirectory: () => selection.promise,
+    download: async () => ({offer:{revision:1,count:1},transfer:null}) });
+  ui.submit(); await until(() => ui.element('status').textContent === 'Connected'); ui.element('clipboard').click();
+  await until(() => !ui.element('download').hidden);
+  await ui.action('download'); await until(() => ui.element('download').disabled);
+  await ui.lifecycle().prepare({signal:new ui.window.AbortController().signal,context:ui.context});
+  selection.resolve('/chosen'); await new Promise(resolve=>setTimeout(resolve,30));
+  assert.equal(ui.calls.some(call=>call.method==='downloadStart'),false);
 });

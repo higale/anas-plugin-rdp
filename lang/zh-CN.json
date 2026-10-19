@@ -146,5 +146,25 @@
     "cancelling": "当前批次完成后停止… 已确认：{{sent}} / {{total}} 个字符",
     "cancelled": "已停止，确认的部分已经发送。原文和剩余内容已保留。",
     "failed": "输入失败，可能已经部分输入。进度只统计收到回执的批次，请核对远程内容并编辑剩余内容后再发送。"
+  },
+  "download": {
+    "action": "下载远端文件到本机（{{count}} 项）",
+    "progress": "正在下载 {{bytes}} / {{total}}",
+    "completed": "下载完成",
+    "cancelled": "下载已取消",
+    "failed": "下载失败",
+    "reveal": "在 Finder 中显示",
+    "dismiss": "关闭",
+    "select_directory": "选择下载保存目录",
+    "changed": "远端复制内容已更新，请重新选择下载。",
+    "directory_error": "保存目录不可用，请重新选择。",
+    "read_error": "读取远端文件失败，请检查连接并重试。",
+    "write_error": "写入本机文件失败，请检查目录权限和可用空间。",
+    "exists_error": "保存目录中已有同名文件或文件夹，请选择其他目录或移走同名项目后重试。",
+    "files_error": "远端文件清单无效或存在重名，无法下载。",
+    "cleanup_error": "未能清理部分下载文件，请打开目录手动检查。",
+    "busy": "当前连接已有下载任务。",
+    "update_host": "请更新 Anas，以使用目录选择功能。",
+    "reveal_error": "无法在 Finder 中显示，请检查文件是否仍存在。"
   }
 }

@@ -146,5 +146,25 @@
     "cancelling": "Stopping after the current batch… Confirmed: {{sent}} / {{total}} characters",
     "cancelled": "Stopped. The confirmed portion has been sent. Original and remaining text are preserved.",
     "failed": "Input failed and may be partially delivered. Only acknowledged batches count as confirmed. Check the remote content and edit the remaining text before sending again."
+  },
+  "download": {
+    "action": "Download remote files to this Mac ({{count}} items)",
+    "progress": "Downloading {{bytes}} / {{total}}",
+    "completed": "Download completed",
+    "cancelled": "Download cancelled",
+    "failed": "Download failed",
+    "reveal": "Show in Finder",
+    "dismiss": "Close",
+    "select_directory": "Choose a download destination",
+    "changed": "The remote clipboard changed. Select the files again.",
+    "directory_error": "The destination is unavailable. Choose another folder.",
+    "read_error": "Could not read the remote files. Check the connection and retry.",
+    "write_error": "Could not write local files. Check folder permissions and free space.",
+    "exists_error": "The destination already contains a file or folder with the same name. Choose another folder or move the existing item and retry.",
+    "files_error": "The remote file list is invalid or contains duplicate names.",
+    "cleanup_error": "Some partial files could not be removed. Open the folder to check them.",
+    "busy": "This connection already has an active download.",
+    "update_host": "Update Anas to use the directory picker.",
+    "reveal_error": "Could not show the files in Finder. Check that they still exist."
   }
 }

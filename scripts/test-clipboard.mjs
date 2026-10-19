@@ -26,7 +26,7 @@ try {
 }
 catch { }
 if (!pin) {
-    const state = JSON.parse(await readFile(join(homedir(), '.galeAnas/plugins_data/rdp/profiles.json'), 'utf8'));
+    const state = JSON.parse(await readFile(join(homedir(), '.galeAnas/db/plugins/rdp/profiles.json'), 'utf8'));
     pin = state.certificate_trust.find(t => t.host === config.host && t.port === (config.port ?? 3389))?.sha256;
 }
 assert.ok(pin, 'Previously verified certificate required');
@@ -64,7 +64,7 @@ async function until(predicate, label, limit = 30000) { const end = Date.now() +
     await new Promise(r => setTimeout(r, 100));
 } }
 const input = actions => command('input', { actions, interval_ms: 80 });
-async function remote(script) { const encoded = Buffer.from(script, 'utf16le').toString('base64'); await input([{ type: 'hotkey', keys: ['WIN', 'R'] }]); await new Promise(r => setTimeout(r, 250)); await input([{ type: 'text', text: 'cmd.exe' }, { type: 'press', key: 'ENTER' }]); await new Promise(r => setTimeout(r, 500)); await input([{ type: 'text', text: 'powershell.exe -NoProfile -STA -WindowStyle Hidden -EncodedCommand ' + encoded + ' & exit' }, { type: 'press', key: 'ENTER' }]); }
+async function remote(script) { const encoded = Buffer.from(script, 'utf16le').toString('base64'); await input([{ type: 'hotkey', keys: ['WIN', 'R'] }]); await new Promise(r => setTimeout(r, 700)); await input([{ type: 'text', text: 'cmd.exe' }, { type: 'press', key: 'ENTER' }]); await new Promise(r => setTimeout(r, 2500)); await input([{ type: 'text', text: 'powershell.exe -NoProfile -STA -WindowStyle Hidden -EncodedCommand ' + encoded + ' & exit' }, { type: 'press', key: 'ENTER' }]); }
 const psQuote = s => "'" + s.replaceAll("'", "''") + "'";
 async function localShell(script) { await new Promise((resolve, reject) => { const p = spawn('powershell.exe', ['-NoProfile', '-STA', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, stdio: 'ignore' }); p.on('close', code => code === 0 ? resolve() : reject(Error('Local clipboard helper failed ' + code))); }); }
 const token = randomBytes(32).toString('hex');
@@ -185,7 +185,37 @@ try {
         await command('setClipboardEnabled', { enabled: false });
         result.push('download unlock');
     } else {
-        console.log('Finder download is not implemented; download and download-cancellation checks were not run.');
+        await remote("Add-Type -AssemblyName System.Windows.Forms; $d=" + remoteDir + "; $list=New-Object System.Collections.Specialized.StringCollection; [void]$list.Add((Join-Path $d " + psQuote(folder) + ")); [Windows.Forms.Clipboard]::SetFileDropList($list)");
+        let offer;
+        await until(async () => { offer = (await command('downloadStatus')).offer; return offer; }, 'remote file metadata');
+        const downloaded = join(dir, 'download'); await mkdir(downloaded);
+        assert.deepEqual(await readdir(downloaded), [], 'No automatic content download');
+        let download = await command('downloadStart', { revision: offer.revision, directory: downloaded });
+        await command('setClipboardActivity', { active: false, publish: false });
+        await assert.rejects(command('setClipboardEnabled', { enabled: false }), /RDP_CLIPBOARD_BUSY/);
+        await until(async () => { download = await command('downloadStatus'); return download.transfer.state !== 'running'; }, 'background download', 190000);
+        assert.equal(download.transfer.state, 'completed', download.transfer.error);
+        assert.equal(download.transfer.path, downloaded);
+        assert.deepEqual(await readdir(downloaded), [folder], 'No generated wrapper directory');
+        const destination = join(downloaded, folder);
+        assert.equal(createHash('sha256').update(await readFile(join(destination, filename))).digest('hex').toUpperCase(), sha);
+        assert.equal(await readFile(join(destination, '子目录', '你好.txt'), 'utf8'), smallText);
+        assert.equal((await stat(join(destination, '子目录', '空文件.txt'))).size, 0);
+        result.push(`macOS explicit background download ${fileMiB} MiB SHA256, Unicode directory, text and empty file verified`);
+        const beforeCancel = await readdir(downloaded);
+        await command('downloadStart', { revision: offer.revision, directory: downloaded });
+        await until(async () => { download = await command('downloadStatus'); return download.transfer.state !== 'running'; }, 'destination conflict');
+        assert.equal(download.transfer.error, 'RDP_DOWNLOAD_EXISTS');
+        const cancelledDirectory = join(dir, 'cancel-download'); await mkdir(cancelledDirectory);
+        await writeFile(join(cancelledDirectory, 'existing.txt'), 'preserve');
+        download = await command('downloadStart', { revision: offer.revision, directory: cancelledDirectory });
+        await command('downloadCancel', { id: download.transfer.id });
+        await until(async () => { download = await command('downloadStatus'); return download.transfer.state !== 'running'; }, 'cancel cleanup');
+        assert.equal(download.transfer.state, 'cancelled');
+        assert.deepEqual(await readdir(downloaded), beforeCancel);
+        assert.deepEqual(await readdir(cancelledDirectory), ['existing.txt']);
+        assert.equal(await readFile(join(cancelledDirectory, 'existing.txt'), 'utf8'), 'preserve');
+        result.push('cancel cleans partial download and preserves previous completed files');
         await command('setClipboardEnabled', { enabled: false });
     }
     await remote("$d=[IO.Path]::GetFullPath(" + remoteDir + "); if([IO.Path]::GetDirectoryName($d) -ne [IO.Path]::GetFullPath($env:TEMP).TrimEnd(\'\\\')){throw \'Unexpected test directory\'}; Remove-Item -LiteralPath $d -Recurse -Force");

@@ -18,8 +18,9 @@ use std::{
 
 #[cfg(windows)]
 mod windows;
-#[cfg(windows)]
 use std::sync::atomic::AtomicU32;
+#[cfg(target_os = "macos")]
+mod download;
 const MAX_TEXT: usize = 16 * 1024 * 1024;
 const CHUNK: u32 = 1024 * 1024;
 
@@ -36,12 +37,13 @@ pub struct Shared {
     remote: Mutex<Option<RemoteCopy>>,
     status: tokio::sync::watch::Sender<&'static str>,
     closed: AtomicBool,
-    #[cfg(windows)]
     streams: AtomicU32,
     pending: Mutex<HashMap<u32, Reply>>,
     local: Mutex<Local>,
     activity: Mutex<Activity>,
     generation: AtomicU64,
+    #[cfg(target_os = "macos")]
+    downloads: download::Downloads,
     formats: Mutex<VecDeque<(u64, u64, ClipboardFormatId)>>,
 }
 #[derive(Debug)]
@@ -111,7 +113,6 @@ impl Shared {
     fn cancel(&self) {
         self.pending.lock().unwrap().clear();
     }
-    #[cfg(windows)]
     fn read(
         &self,
         index: usize,
@@ -147,10 +148,21 @@ impl Shared {
             return Err(());
         }
         // A stalled individual read fails the paste, never the RDP connection or plugin.
-        let result = rx
-            .recv_timeout(Duration::from_secs(120))
-            .map_err(|_| ())
-            .and_then(|x| x);
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+        let result = loop {
+            #[cfg(target_os = "macos")]
+            if self.downloads.cancelled() {
+                break Err(());
+            }
+            if self.closed.load(Ordering::SeqCst) || std::time::Instant::now() >= deadline {
+                break Err(());
+            }
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(result) => break result,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(_) => break Err(()),
+            }
+        };
         self.pending.lock().unwrap().remove(&id);
         result
     }
@@ -181,12 +193,13 @@ impl Clipboard {
             remote: Mutex::new(None),
             status: tokio::sync::watch::channel("initializing").0,
             closed: AtomicBool::new(false),
-            #[cfg(windows)]
             streams: AtomicU32::new(1),
             pending: Mutex::new(HashMap::new()),
             local: Mutex::new(Local::default()),
             activity: Mutex::new(Activity::default()),
             generation: AtomicU64::new(0),
+            #[cfg(target_os = "macos")]
+            downloads: download::Downloads::default(),
             formats: Mutex::new(VecDeque::new()),
         });
         let (tx, rx) = mpsc::channel();
@@ -281,8 +294,13 @@ impl Clipboard {
                                 }
                                 Err(_) => report_error(),
                             }
-                            #[cfg(not(windows))]
-                            let _ = (files, data_id, generation);
+                            #[cfg(target_os = "macos")]
+                            {
+                                worker.downloads.offer(files, data_id, publication);
+                                if let Some(remote) = worker.remote.lock().unwrap().as_mut() {
+                                    remote.awaiting = false;
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -308,6 +326,8 @@ impl Clipboard {
                         }
                         sequence = Some(before);
                         worker.remote.lock().unwrap().take();
+                        #[cfg(target_os = "macos")]
+                        worker.downloads.clear_offer();
                         worker.publication.fetch_add(1, Ordering::SeqCst);
                         match content {
                             Some(Content::Text(text)) => {
@@ -348,7 +368,6 @@ impl Clipboard {
                             })
                         };
                         if let Some(formats) = remote {
-                            #[cfg(windows)]
                             if let Some(format) = formats
                                 .iter()
                                 .find(|f| f.name.as_ref() == Some(&ClipboardFormatName::FILE_LIST))
@@ -396,6 +415,8 @@ impl Clipboard {
         if !enabled {
             self.shared.cancel();
             self.shared.remote.lock().unwrap().take();
+            #[cfg(target_os = "macos")]
+            self.shared.downloads.clear_offer();
         }
         drop(activity);
         self.shared.update_status();
@@ -425,6 +446,27 @@ impl Clipboard {
         let _ = self.tx.send(Event::Poll);
         Ok(())
     }
+    pub fn download_command(
+        &self,
+        method: &str,
+        command: &serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        #[cfg(target_os = "macos")]
+        {
+            match method {
+                "downloadStatus" => {}
+                "downloadStart" => self.shared.downloads.start(self.shared.clone(), command)?,
+                "downloadCancel" => self.shared.downloads.cancel(command)?,
+                _ => anyhow::bail!("RDP_DOWNLOAD_UNAVAILABLE"),
+            }
+            Ok(self.shared.downloads.snapshot())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (method, command);
+            Ok(serde_json::Value::Null)
+        }
+    }
     pub fn subscribe(&self) -> tokio::sync::watch::Receiver<&'static str> {
         self.shared.status.subscribe()
     }
@@ -432,6 +474,8 @@ impl Clipboard {
         self.shared.closed.store(true, Ordering::SeqCst);
         self.shared.enabled.store(false, Ordering::SeqCst);
         self.shared.cancel();
+        #[cfg(target_os = "macos")]
+        self.shared.downloads.close();
         let _ = self.tx.send(Event::Stop);
     }
 }
@@ -554,6 +598,8 @@ impl CliprdrBackend for Clipboard {
         // Without protocol locking a clipboard replacement also ends the old upload.
         self.shared.activity.lock().unwrap().uploads.remove(&None);
         if self.shared.enabled.load(Ordering::SeqCst) {
+            #[cfg(target_os = "macos")]
+            self.shared.downloads.clear_offer();
             self.shared.publication.fetch_add(1, Ordering::SeqCst);
             *self.shared.remote.lock().unwrap() = Some(RemoteCopy {
                 formats: formats.to_vec(),
@@ -611,6 +657,10 @@ impl CliprdrBackend for Clipboard {
                 .tx
                 .send(Event::Files(files.to_vec(), id, generation, publication));
         }
+    }
+    #[cfg(target_os = "macos")]
+    fn on_outgoing_locks_cleared(&mut self, ids: &[LockDataId]) {
+        self.shared.downloads.expire(ids);
     }
     fn on_file_contents_response(&mut self, response: FileContentsResponse<'_>) {
         if let Some(reply) = self
@@ -768,12 +818,13 @@ mod tests {
             remote: Mutex::new(None),
             status: tokio::sync::watch::channel("syncing").0,
             closed: AtomicBool::new(false),
-            #[cfg(windows)]
             streams: AtomicU32::new(1),
             pending: Mutex::default(),
             local: Mutex::default(),
             activity: Mutex::default(),
             generation: AtomicU64::new(0),
+            #[cfg(target_os = "macos")]
+            downloads: download::Downloads::default(),
             formats: Mutex::default(),
         });
         let (tx, rx) = mpsc::channel();
