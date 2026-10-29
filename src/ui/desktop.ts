@@ -23,7 +23,9 @@ export class Desktop {
   private epoch = 0;
   private uiRevision = 0;
   private uiLocked = false;
+  private reportedState?: string;
   private clipboardRevision = -1;
+  private clipboard?: { enabled: boolean; state?: string };
   private controlling = false;
   private inputBlocked = false;
   private settled = false;
@@ -148,18 +150,26 @@ export class Desktop {
   updateClipboard(enabled: boolean, revision: number, state?: string) {
     if (this.abort.signal.aborted || revision < this.clipboardRevision) return;
     this.clipboardRevision = revision;
+    state ??= this.clipboard?.state;
+    if (this.clipboard?.enabled === enabled && this.clipboard.state === state) return;
+    this.clipboard = { enabled, state };
     this.onClipboard(enabled, state);
   }
   updateInputLock(locked: boolean, revision: number) {
     if (this.abort.signal.aborted) return;
     if (typeof locked !== 'boolean' || !Number.isSafeInteger(revision) || revision < 0) throw new Error('RDP_DISPLAY_PROTOCOL');
+    const previousLocked = this.uiLocked, previousControlling = this.controlling;
     // Native receipts and display snapshots travel separately; never roll back newer state.
     if (revision >= this.uiRevision) { this.uiLocked = locked; this.uiRevision = revision; }
     const metadata = this.metadata;
     if (!metadata) return;
     this.controlling = metadata.owner === this.connection.pageId && !this.uiLocked;
     if (!this.controlling) this.pendingMouseSequence = 0;
-    this.onState(metadata.state, this.uiLocked);
+    // Display revisions include pixel/cursor updates, not just control changes.
+    if (this.reportedState !== metadata.state || previousLocked !== this.uiLocked || previousControlling !== this.controlling) {
+      this.reportedState = metadata.state;
+      this.onState(metadata.state, this.uiLocked);
+    }
     this.updateLocalCursor();
   }
   private ack(revision: number) { this.socket.send(JSON.stringify({ type: 'ack', revision })); }

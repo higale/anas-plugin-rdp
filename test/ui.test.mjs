@@ -1409,15 +1409,15 @@ test('connection actions have matching accessible labels in the sidebar and host
   const ui = await fixture(t, { create: () => pending.promise });
   const stop = ui.element('disconnect');
   assert.equal(stop.textContent, '');
-  assert.equal(stop.title, 'Disconnect');
+  assert.equal(stop.dataset.tooltip, 'Disconnect');
   assert.equal(stop.disabled, false);
   ui.submit();
-  await until(() => stop.title === 'Cancel');
+  await until(() => stop.dataset.tooltip === 'Cancel');
   assert.match(stop.querySelector('.action-icon').getAttribute('src'), /assets\/x\.svg/);
   assert.equal(ui.toolbar().actions.find(action => action.id === 'disconnect').icon, 'assets/x.svg');
   pending.resolve();
   await until(() => ui.element('status').textContent === 'Connected');
-  assert.equal(stop.title, 'Disconnect');
+  assert.equal(stop.dataset.tooltip, 'Disconnect');
   assert.match(stop.querySelector('.action-icon').getAttribute('src'), /assets\/unplug\.svg/);
 });
 
@@ -1787,7 +1787,7 @@ test('the sidebar move icon uses page handoff, prevents duplicate moves and repo
   const ui = await fixture(t, { move: () => pending.promise });
   const button = ui.element('move-window');
   assert.equal(ui.element('disconnect').nextElementSibling, button);
-  assert.equal(button.hidden, false); assert.equal(button.title, 'Move to separate window');
+  assert.equal(button.hidden, false); assert.equal(button.dataset.tooltip, 'Move to separate window');
   assert.match(button.querySelector('img').src, /move-window\.svg$/);
   button.click(); button.click();
   assert.equal(button.disabled, true);
@@ -1800,7 +1800,7 @@ test('the sidebar move icon uses page handoff, prevents duplicate moves and repo
   assert.match(ui.element('error-message').textContent, /move/i);
   assert.equal(ui.calls.some(call => ['create', 'disconnect', 'profiles.save'].includes(call.method)), false);
   ui.info.language = 'zh-CN'; ui.window.dispatchEvent(new ui.window.Event('focus'));
-  await until(() => button.title === '移到独立窗口');
+  await until(() => button.dataset.tooltip === '移到独立窗口');
   ui.move('window'); assert.equal(button.hidden, true);
   const home = await fixture(t, { manager: true }); assert.equal(home.element('move-window').hidden, true);
 });
@@ -2022,7 +2022,7 @@ test('sidebar resolution menu includes the custom profile size and changes only 
   assert.deepEqual(ui.calls.filter(call => call.method === 'resize').map(call => [call.params.width, call.params.height]), [[1536, 864]]);
   pending.resolve(); await until(() => !button.disabled);
   ui.window.__remoteSize(1536, 864);
-  assert.match(button.title, /1536 × 864/);
+  assert.match(button.dataset.tooltip, /1536 × 864/);
   button.click();
   assert.equal(ui.window.document.querySelector('[aria-checked=true]').textContent, '1536 × 864 (default)');
   ui.element('desktop').getBoundingClientRect = () => ({ width: 450, height: 600 }); ui.window.__resizeDesktop();
@@ -2230,6 +2230,35 @@ test('failed text delivery and page handoff retain acknowledged progress without
   assert.equal(target.calls.some(call => call.method === 'inputText'), false);
 });
 
+test('unchanged download polls leave controls untouched and changes update only affected buttons', async t => {
+  let polls = 0, count = 3;
+  const ui = await fixture(t, { profile: { clipboardSupport: true }, download: async () => {
+    polls++;
+    return { offer: { revision: 10, count }, transfer: null };
+  } });
+  ui.submit();
+  await until(() => ui.element('status').textContent === 'Connected');
+  ui.element('clipboard').click();
+  await until(() => !ui.element('download').hidden && !ui.element('clipboard').disabled);
+  const changes = [];
+  const observer = new ui.window.MutationObserver(records => changes.push(...records));
+  observer.observe(ui.element('connection-actions'), { attributes: true, childList: true, subtree: true });
+  t.after(() => observer.disconnect());
+  const start = polls;
+  await until(() => polls >= start + 2);
+  assert.equal(changes.length, 0, 'Polling unchanged download state must not rewrite button DOM');
+  count = 4;
+  await until(() => ui.element('download').dataset.tooltip.includes('4 items'));
+  assert.ok(changes.length > 0);
+  assert.ok(changes.every(record => record.target === ui.element('download')), 'A new download offer must not rewrite other buttons');
+  changes.length = 0;
+  ui.element('ui-lock').click();
+  await until(() => ui.element('ui-lock').getAttribute('aria-pressed') === 'true' && !ui.element('ui-lock').disabled);
+  assert.ok(changes.length > 0);
+  assert.ok(changes.every(record => ui.element('ui-lock').contains(record.target)
+    || (record.target === ui.element('input-text') && record.attributeName === 'disabled')), 'Lock changes only update the lock action and text input availability');
+});
+
 for (const location of ['sidebar', 'window']) test(`explicit clipboard download in ${location} shares status, cancellation and Finder action`, async t => {
   let state = { offer: { revision: 10, count: 3 }, transfer: null };
   let selected = false;
@@ -2241,7 +2270,7 @@ for (const location of ['sidebar', 'window']) test(`explicit clipboard download 
   ui.submit(); await until(() => ui.element('status').textContent === 'Connected');
   ui.element('clipboard').click();
   await until(() => !ui.element('download').hidden);
-  assert.match(ui.element('download').title, /3 items/);
+  assert.match(ui.element('download').dataset.tooltip, /3 items/);
   assert.equal(selected, false); assert.equal(ui.calls.some(call => call.method === 'downloadStart'), false);
   if (location === 'window') await ui.action('download'); else ui.element('download').click();
   await until(() => !ui.element('download-cancel').hidden);

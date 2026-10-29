@@ -8,7 +8,7 @@ const compiled = await build({ entryPoints: ['src/ui/desktop.ts'], bundle: true,
 function cursorFixture(t, { disableMouseAnimation = false, reducedMotion = false } = {}) {
   const dom = new JSDOM('<main></main>', { runScripts: 'outside-only' });
   const { window } = dom;
-  const sent = [], draws = [], resizeErrors = [], capabilities = [];
+  const sent = [], draws = [], resizeErrors = [], capabilities = [], states = [], clipboards = [];
   let socket, resized, time = 0, nextFrame = 0;
   const frames = new Map();
   window.performance.now = () => time;
@@ -29,7 +29,8 @@ function cursorFixture(t, { disableMouseAnimation = false, reducedMotion = false
     close() { this.readyState = 3; }
   };
   window.eval(compiled.outputFiles[0].text + '\nwindow.RdpDesktop = RdpDesktop;');
-  const desktop = new window.RdpDesktop.Desktop(window.document.querySelector('main'), { url: 'ws://test.invalid', token: 'fixture', pageId: 'page' }, () => {}, undefined, undefined, disableMouseAnimation, error => resizeErrors.push(error), supported => capabilities.push(supported));
+  const desktop = new window.RdpDesktop.Desktop(window.document.querySelector('main'), { url: 'ws://test.invalid', token: 'fixture', pageId: 'page' },
+    (state, locked) => states.push({ state, locked }), undefined, (enabled, state) => clipboards.push({ enabled, state }), disableMouseAnimation, error => resizeErrors.push(error), supported => capabilities.push(supported));
   let bounds = { left: 10, top: 20, width: 200, height: 100 };
   desktop.canvas.getBoundingClientRect = () => bounds;
   const shape = { kind: 'bitmap', width: 2, height: 2, x: 1, y: 1, pixels: [255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255] };
@@ -43,10 +44,40 @@ function cursorFixture(t, { disableMouseAnimation = false, reducedMotion = false
   const move = (x, y) => desktop.canvas.dispatchEvent(new window.MouseEvent('pointermove', { clientX: x, clientY: y }));
   const layer = window.document.querySelector('.remote-cursor-layer'), icon = layer.querySelector('img');
   t.after(() => { desktop.dispose(); window.close(); });
-  return { window, desktop, snapshot, move, sent, draws, shape, layer, icon, resizeErrors, capabilities,
+  return { window, desktop, snapshot, move, sent, draws, shape, layer, icon, resizeErrors, capabilities, states, clipboards,
+    frame: () => socket.onmessage({ data: image }),
     advance(ms) { time += ms; const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(time)); },
     animations: () => frames.size, close: () => socket.onclose(), resize: value => { bounds = value; resized(); } };
 }
+
+test('display snapshots notify controls only on semantic changes while receipts still advance revisions', t => {
+  const ui = cursorFixture(t);
+  for (let revision = 2; revision <= 40; revision++) {
+    ui.snapshot({ revision, uiRevision: revision, cursorPosition: { x: revision, y: 20 }, image: true });
+    ui.frame();
+  }
+  assert.deepEqual(ui.states, [{ state: 'connected', locked: false }]);
+  assert.deepEqual(ui.clipboards, [{ enabled: false, state: undefined }]);
+  assert.equal(ui.sent.at(-1).revision, 40, 'Every display update is still acknowledged');
+  assert.equal(ui.draws.length, 41, 'Every desktop frame is still drawn, in addition to the cursor bitmap');
+  assert.equal(ui.icon.style.left, '39px', 'Cursor updates continue without refreshing controls');
+  ui.desktop.updateInputLock(true, 39);
+  ui.desktop.updateClipboard(true, 39, 'active');
+  assert.equal(ui.states.length, 1, 'An unchanged newer snapshot must still reject stale lock receipts');
+  assert.equal(ui.clipboards.length, 1, 'An unchanged newer snapshot must still reject stale clipboard receipts');
+  ui.desktop.updateInputLock(true, 41);
+  ui.desktop.updateInputLock(true, 42);
+  assert.deepEqual(ui.states.at(-1), { state: 'connected', locked: true });
+  assert.equal(ui.states.length, 2);
+  ui.desktop.updateClipboard(true, 41, 'active');
+  ui.desktop.updateClipboard(true, 42);
+  ui.desktop.updateClipboard(true, 43, 'paused');
+  assert.deepEqual(ui.clipboards.slice(1), [{ enabled: true, state: 'active' }, { enabled: true, state: 'paused' }]);
+  ui.snapshot({ revision: 44, uiRevision: 42, uiLocked: true, state: 'connecting', clipboardEnabled: true, clipboardState: 'paused' });
+  assert.deepEqual(ui.states.at(-1), { state: 'connecting', locked: true });
+  ui.close();
+  assert.equal(ui.states.at(-1).state, 'RDP_DISPLAY_CLOSED');
+});
 
 test('remote cursor uses an independent clipped layer, hotspot and desktop scale, including while input is locked', t => {
   const ui = cursorFixture(t);

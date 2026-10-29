@@ -16,6 +16,7 @@ header{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:sp
 #connection-actions{margin-left:auto;display:flex;gap:8px;flex-shrink:0}
 .icon-button{width:var(--control-height);padding:0;display:inline-flex;align-items:center;justify-content:center}
 .action-icon{display:block;width:16px;height:16px;flex:none;object-fit:contain}
+.tooltip{position:fixed;z-index:1001;width:max-content;max-width:min(32em,calc(100vw - 16px));max-height:calc(100vh - 16px);overflow:hidden;padding:5px 7px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);box-shadow:0 8px 24px #0003;font-size:.86rem;font-weight:600;line-height:1.25;white-space:pre-line;overflow-wrap:anywhere;pointer-events:none}
 button:disabled .action-icon{filter:grayscale(1)}
 #disconnect{flex-shrink:0}
 form{display:grid;gap:14px}

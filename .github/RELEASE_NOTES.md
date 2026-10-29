@@ -1,27 +1,33 @@
-# Anas RDP v0.1.10
+# Anas RDP v0.1.11
 
 ## 简体中文
 
-需要 **Anas 4.0.4 或更新版本**（插件 API 2）。文件下载使用宿主新增的目录选择与文件定位接口，请先升级 Anas，再安装此插件。
+需要 **Anas 4.0.4 或更新版本**（插件 API 2）。
 
-- macOS 新增远端剪贴板文件下载：复制远端文件或文件夹后显示下载按钮，选择本地目录后按需分块传输。
-- 直接保存到所选目录，保留远端原有目录结构；同名文件或文件夹明确报冲突，不覆盖、不合并。
-- 显示传输进度，支持取消和完成后在 Finder 中显示。关闭桌面或在侧栏与窗口间移动时继续后台下载；断开连接或停止插件时结束传输并清理未完成文件。
-- 完善下载失败与清理错误提示，并同步中英文界面和使用说明。
+- 修复侧栏按钮悬停提示偶发不显示：插件页面统一使用 DOM 提示，支持键盘聚焦、动态文字和页面边缘避让，并在点击、移出、菜单、Esc、失焦及页面关闭时清理。
+- 将画面／光标更新与控件状态通知分开；状态不变的下载轮询不刷新界面，单项操作只更新受影响的按钮属性。
+- 保留协议版本推进和迟到回执保护，补充提示生命周期、连续画面更新与按钮刷新回归测试。
 
-下载 `anas-rdp-0.1.10-universal.zip`，从 Anas「设置 → 插件」安装。同一包支持 Windows x64、macOS Apple Silicon 和 Intel；校验值见 `SHA256SUMS.txt`。
+下载 `anas-rdp-0.1.11-universal.zip`，从 Anas「设置 → 插件」覆盖安装。同一包支持 Windows x64、macOS Apple Silicon 和 Intel；校验值见 `SHA256SUMS.txt`。
 
-仍为预览版。macOS Intel 已验证早期下载流程；最终“直接保存到所选目录”版本尚未完成真实远端验收。Apple Silicon 未实机验证，Finder 直接粘贴远端文件未实现，macOS 程序未公证。Windows 多连接剪贴板及 Explorer 粘贴／取消仍需实机验证。完整验证范围及依赖告警见[测试说明](https://github.com/higale/anas-plugin-rdp/blob/main/docs/TESTING.md)。
+本轮 160 项 UI／桌面测试、类型检查和本机构建通过。macOS Electron 真实连接中验证了 7 个按钮连续 3 轮悬停、中英文明暗主题、窗口往返及停止连接；Windows tooltip 尚未实测。CI 构建和包内自检不代替真实远端或各平台交互验收。
+
+仍为预览版。Apple Silicon 未实机验证，macOS 程序未公证；Finder 直接粘贴远端文件未实现，最终“直接保存到所选目录”下载流程、Windows 多连接剪贴板及 Explorer 粘贴／取消仍需补充实机验证。完整范围见[测试说明](https://github.com/higale/anas-plugin-rdp/blob/main/docs/TESTING.md)。
+
+若同时从 Anas 4.0 之前版本升级宿主，请先阅读 [4.x 升级数据说明](https://github.com/higale/anas-agent/blob/main/data/help/UPGRADE_TO_4.zh-CN.md)，了解历史数据布局变化；这不是本次插件更新新增的数据变更。
 
 ## English
 
-Requires **Anas 4.0.4 or later** (plugin API 2). File downloads use the host's new directory selection and file reveal APIs. Upgrade Anas before installing this plugin.
+Requires **Anas 4.0.4 or later** (plugin API 2).
 
-- Add remote clipboard file downloads on macOS: copying remote files or folders reveals a download button; choosing a local destination starts on-demand chunked transfers.
-- Save directly into the selected directory while preserving the original remote folder structure. Existing files or folders cause an explicit conflict instead of being replaced or merged.
-- Show transfer progress, support cancellation and reveal completed downloads in Finder. Downloads continue in the background when closing the desktop or moving between sidebar and window. Disconnecting or stopping the plugin ends transfers and cleans up partial files.
-- Improve download and cleanup error reporting, with matching Chinese and English UI and documentation.
+- Fix intermittent sidebar button tooltips with document-local DOM tooltips, including keyboard focus, changing labels, viewport edge placement, and cleanup on clicks, pointer exit, menus, Escape, blur, and page disposal.
+- Separate desktop/cursor updates from control-state notifications. Unchanged download polls no longer refresh the UI, and individual actions update only affected button attributes.
+- Preserve protocol revision tracking and stale-receipt protection, with regression coverage for tooltip lifecycle, continuous display updates, and button mutations.
 
-Install `anas-rdp-0.1.10-universal.zip` from Anas Settings → Plugins. One package supports Windows x64, Apple Silicon Macs, and Intel Macs; see `SHA256SUMS.txt` for checksums.
+Install `anas-rdp-0.1.11-universal.zip` over the existing plugin from Anas Settings → Plugins. One package supports Windows x64, Apple Silicon Macs, and Intel Macs; see `SHA256SUMS.txt` for checksums.
 
-This remains a preview. An earlier download flow was tested on an Intel Mac; the final version that saves directly into the chosen directory has not completed live remote acceptance testing. Apple Silicon has not been tested on hardware. Direct remote-file paste into Finder is not implemented, and macOS builds are not notarized. Windows multi-connection clipboard behavior and Explorer paste/cancel still need hardware verification. See [testing notes](https://github.com/higale/anas-plugin-rdp/blob/main/docs/TESTING.md) for full validation scope and dependency advisories.
+All 160 UI/desktop tests, type checking, and the local build passed. Live macOS Electron checks covered three hover rounds over seven buttons, Chinese/English and light/dark themes, window handoff, and connection shutdown. Windows tooltips have not been tested on hardware. CI builds and package self-tests do not replace live remote or platform interaction testing.
+
+This remains a preview. Apple Silicon has not been tested on hardware, and macOS builds are not notarized. Direct remote-file paste into Finder is not implemented. The final download flow that saves directly into the chosen directory, Windows multi-connection clipboard behavior, and Explorer paste/cancel still need further live testing. See [testing notes](https://github.com/higale/anas-plugin-rdp/blob/main/docs/TESTING.md) for the full scope.
+
+If also upgrading the host from Anas versions before 4.0, read the [4.x data upgrade notes](https://github.com/higale/anas-agent/blob/main/data/help/UPGRADE_TO_4.en.md) for historical layout changes; these are not new data changes introduced by this plugin update.

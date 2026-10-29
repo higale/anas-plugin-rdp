@@ -6,6 +6,9 @@ import { DEFAULT_DESKTOP_WIDTH, DEFAULT_DESKTOP_HEIGHT, resolution } from '../re
 import { i18n, initializeLanguages, setLanguage, t } from './i18n';
 import type { WindowPlacement, WindowState } from '../window-state';
 import { TextInput, type TextDraft } from './text-input';
+import { installTooltips } from './tooltip';
+
+const disposeTooltips = installTooltips();
 
 type Toolbar = { status?: { label: string; tone: 'neutral' | 'success' | 'warning' | 'danger' }; actions: { id: string; label: string; icon: string; disabled: boolean; pressed?: boolean; items?: { id: string; label: string; checked?: boolean; disabled?: boolean; separatorBefore?: boolean }[]; description?: string }[] };
 
@@ -108,7 +111,10 @@ async function refreshDownload() {
   if (downloadPolling || downloadPending || closing || handoff) return;
   const revision = downloadRevision;
   const current = session;
-  if (!current || !connectionProfile?.clipboardSupport) { downloadState = null; downloadSession = ''; renderDownload(); return; }
+  if (!current || !connectionProfile?.clipboardSupport) {
+    if (downloadState || downloadSession) { downloadState = null; downloadSession = ''; renderDownload(); }
+    return;
+  }
   if (downloadSession !== current.id) { downloadState = null; downloadSession = current.id; downloadIssue = undefined; dismissedDownload = ''; renderDownload(); }
   if (!connected) {
     if (downloadState?.transfer?.state === 'running') { downloadState.transfer.state = 'failed'; downloadState.transfer.error = 'RDP_SESSION_CLOSED'; renderDownload(); }
@@ -118,6 +124,7 @@ async function refreshDownload() {
   try {
     const result = await window.anas.backend.call('downloadStatus', { owner, id: current.id }) as DownloadState | null;
     if (session !== current || closing || handoff || revision !== downloadRevision) return;
+    if (JSON.stringify(result) === JSON.stringify(downloadState)) return;
     downloadState = result; renderDownload(); presentation();
   } catch {
     if (session === current && revision === downloadRevision && downloadState?.transfer?.state === 'running') {
@@ -443,16 +450,16 @@ function presentation() {
   document.body.dataset.location = location;
   element('connection-header').hidden = instanceId !== 'main' && location === 'window' && toolbarReady;
   element('connection-name').hidden = !element('connection-header').hidden;
-  element('move-window').hidden = instanceId === 'main' || location !== 'sidebar';
-  element('download').hidden = !connected || !clipboardEnabled || (!downloadState?.offer && downloadState?.transfer?.state !== 'running');
-  element('resolution-menu').hidden = instanceId === 'main' || !connected || !dynamicResolutionAvailable();
-  element('fit-window').hidden = instanceId === 'main' || location !== 'window' || !!dynamicResolutionAvailable();
+  element('move-window').toggleAttribute('hidden', instanceId === 'main' || location !== 'sidebar');
+  element('download').toggleAttribute('hidden', !connected || !clipboardEnabled || (!downloadState?.offer && downloadState?.transfer?.state !== 'running'));
+  element('resolution-menu').toggleAttribute('hidden', instanceId === 'main' || !connected || !dynamicResolutionAvailable());
+  element('fit-window').toggleAttribute('hidden', instanceId === 'main' || location !== 'window' || !!dynamicResolutionAvailable());
   for (const action of connectionActions()) {
     const button = element<HTMLButtonElement>(action.id);
-    button.disabled = action.disabled;
-    if (action.pressed !== undefined) button.setAttribute('aria-pressed', String(action.pressed));
-    button.title = action.label;
-    button.setAttribute('aria-label', action.label);
+    button.toggleAttribute('disabled', action.disabled);
+    if (action.pressed !== undefined && button.getAttribute('aria-pressed') !== String(action.pressed)) button.setAttribute('aria-pressed', String(action.pressed));
+    if (button.dataset.tooltip !== action.label) button.dataset.tooltip = action.label;
+    if (button.getAttribute('aria-label') !== action.label) button.setAttribute('aria-label', action.label);
     const icon = button.querySelector<HTMLImageElement>('.action-icon')!;
     if (icon.getAttribute('src') !== action.icon) icon.src = action.icon;
   }
@@ -484,7 +491,7 @@ function presentation() {
   });
 }
 function status(key: string) {
-  statusKey = key; element('status').textContent = t(key); element('status').title = t(key);
+  statusKey = key; element('status').textContent = t(key); element('status').dataset.tooltip = t(key);
   element('connect').textContent = t(key === 'status.idle' || key === 'status.password_required' ? 'actions.connect' : 'actions.reconnect');
   presentation();
 }
@@ -516,20 +523,20 @@ function controls() {
   const busy = connecting || connected || disconnecting || savingTrust || editing || !ready;
   if (!connected) uiLocked = false;
   if (!connected) clipboardEnabled = false;
-  element('clipboard').hidden = !connectionProfile?.clipboardSupport;
+  element('clipboard').toggleAttribute('hidden', !connectionProfile?.clipboardSupport);
   const manager = instanceId === 'main';
   element('manager').hidden = !manager || editorOpen;
   element('manager').toggleAttribute('inert', !ready);
   element('profile-editor').hidden = !manager || !editorOpen;
   element('connection').hidden = manager || connected;
-  element('connection-actions').hidden = manager;
+  element('connection-actions').toggleAttribute('hidden', manager);
 
   input('session-password').disabled = busy;
   element('session-password-field').hidden = !!connectionProfile?.hasPassword && !passwordPrompt;
   element('session-remember-field').hidden = element('session-password-field').hidden;
   input('session-remember-password').disabled = busy || errorKey === 'errors.missing';
   input('session-password').placeholder = connectionProfile?.hasPassword ? t('profiles.password_available') : '';
-  element('disconnect').hidden = manager;
+  element('disconnect').toggleAttribute('hidden', manager);
   element('connect').hidden = manager;
   element('cancel-edit').hidden = !manager;
   element('status').hidden = manager && statusKey === 'status.idle';
@@ -551,7 +558,7 @@ function controls() {
   element('edit-locked').hidden = !locked;
   element('edit-locked').textContent = t(!sessionsKnown ? 'errors.sessions' : openProfileIds.includes(selected?.id ?? '') ? 'errors.profile_open' : 'errors.active');
   input('delete').disabled ||= !selected || profileWorking(selected?.id);
-  input('delete').title = t(selected && profileWorking(selected.id) ? 'errors.active' : 'actions.delete');
+  input('delete').dataset.tooltip = t(selected && profileWorking(selected.id) ? 'errors.active' : 'actions.delete');
   input('confirm-delete').disabled ||= profileWorking(selected?.id);
   const index = profiles.findIndex(item => item.id === selected?.id);
   input('up').disabled ||= index <= 0;
@@ -1160,6 +1167,7 @@ async function checkLaunch() {
   finally { checkingLaunch = false; }
 }
 function disposePage() {
+  disposeTooltips();
   adaptiveResolution.dispose();
   clearTimeout(windowStateTimer);
   closeContextMenu();
@@ -1254,7 +1262,7 @@ function translate() {
   for (const [id, key] of Object.entries(buttons)) element(id).textContent = t(key);
   element('resolution-custom').textContent = t('fields.custom_resolution');
   for (const [id, key] of Object.entries({ new: 'actions.new', delete: 'actions.delete', up: 'actions.up', down: 'actions.down' })) {
-    element(id).title = t(key); element(id).setAttribute('aria-label', t(key));
+    element(id).dataset.tooltip = t(key); element(id).setAttribute('aria-label', t(key));
   }
   for (const row of Array.from(element('profiles').querySelectorAll<HTMLElement>('li'))) {
     row.classList.toggle('selected', row.dataset.id === selected?.id);
@@ -1274,7 +1282,7 @@ function translate() {
   element('language-warning').textContent = t('errors.language');
   element('desktop').setAttribute('aria-label', t('plugin.name'));
   element('title').textContent = instanceId === 'main' ? (editorOpen ? selected ? t('profiles.edit', { name: selected.name }) : t('profiles.new') : t('plugin.name')) : connectionProfile?.name ?? t('plugin.name');
-  element('title').title = element('title').textContent;
+  element('title').dataset.tooltip = element('title').textContent;
   document.title = element('title').textContent;
   element('toolbar-error').textContent = t('errors.toolbar');
   if (resizeFailure) element('resize-warning').textContent = t(resizeFailure === 'RDP_RESIZE_UNSUPPORTED' ? 'errors.resize_unsupported' : 'errors.resize_failed');
