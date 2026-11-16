@@ -45,6 +45,7 @@ async function fixture(t, options = {}) {
   const dom = new JSDOM(html, { url: 'https://rdp.invalid/', runScripts: 'outside-only', pretendToBeVisual: true });
   t.after(() => dom.window.close());
   const { window } = dom;
+  if (options.userAgent) Object.defineProperty(window.navigator, 'userAgent', { value: options.userAgent });
   window.TextEncoder = TextEncoder;
   window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   window.HTMLDialogElement.prototype.close = function () { this.open = false; };
@@ -1596,15 +1597,15 @@ test('the window fit button can refit the same desktop and retry a failed automa
   await ui.action('fit-window');
   assert.equal(ui.element('error').hidden, true);
   const sizes = ui.calls.filter(call => call.method === 'resizeWindow' && call.phase === 'active');
-  assert.equal(sizes.length, 3);
+  assert.equal(sizes.length, 2, 'The capped window now uses the host size action');
   assert.equal(sizes[0].params.restore, true);
   assert.equal(sizes[1].params.restore, true);
-  assert.equal(sizes[2].params.restore, true);
+  assert.equal(ui.toolbar().actions.some(action => action.id === 'fit-window'), false);
   assert.equal(ui.calls.some(call => ['disconnect', 'server.close'].includes(call.method)), false);
   ui.move('sidebar');
   await until(() => !ui.toolbar().actions.some(action => action.id === 'fit-window'));
   await ui.action('fit-window');
-  assert.equal(ui.calls.filter(call => call.method === 'resizeWindow' && call.phase === 'active').length, 3);
+  assert.equal(ui.calls.filter(call => call.method === 'resizeWindow' && call.phase === 'active').length, 2);
 });
 
 test('the first frame enables window fitting without waiting for another connection update', async t => {
@@ -1615,7 +1616,7 @@ test('the first frame enables window fitting without waiting for another connect
   assert.equal(ui.calls.some(call => call.method === 'resizeWindow' && call.phase === 'active'), false);
   ui.window.__remoteSize(1024, 768);
   await until(() => ui.calls.some(call => call.method === 'resizeWindow' && call.phase === 'active'));
-  assert.equal(ui.toolbar().actions.find(action => action.id === 'fit-window').disabled, false);
+  assert.equal(ui.toolbar().actions.some(action => action.id === 'fit-window'), false, 'The host fits a fixed window to its ceiling');
 });
 
 
@@ -1758,6 +1759,18 @@ test('adaptive options are independent, default off, and survive editor handoff 
   moved.submit(); await until(() => !moved.element('manager').hidden);
   const saved=moved.calls.find(call=>call.method==='profiles.save').params;
   assert.equal(saved.adaptiveWindow,true); assert.equal(saved.adaptiveSidebar,false);
+});
+
+for (const userAgent of ['Windows NT 10.0', 'Macintosh']) test(`window sizing preserves the platform controls on ${userAgent}`, async t => {
+  const ui = await fixture(t, { userAgent, location: 'window', profile: { adaptiveWindow: true } });
+  ui.submit(); await until(() => ui.calls.some(call => call.method === 'resize'));
+  await ui.action('adaptive-resolution');
+  await until(() => ui.calls.filter(call => call.method === 'resizeWindow').at(-1)?.params.maximumSize);
+  await ui.action('adaptive-resolution');
+  await until(() => ui.calls.filter(call => call.method === 'resizeWindow').at(-1)?.params.maximumSize === null);
+  for (const call of ui.calls.filter(call => call.method === 'resizeWindow')) {
+    assert.equal(call.params.maximizable, userAgent.includes('Windows') ? false : undefined);
+  }
 });
 
 test('adaptive detached windows expose size choices, restore the window on selection and retain the saved fixed size', async t => {

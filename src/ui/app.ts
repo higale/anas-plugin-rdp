@@ -24,7 +24,7 @@ declare global {
       getInfo(): Promise<{ language: string; theme: string; fontSize: number; view: { instanceId: string; location: 'sidebar' | 'window' } }>;
       onViewChanged(listener: (view: { instanceId: string; location: 'sidebar' | 'window'; activity?: { visible: boolean; active: boolean }; windowMode?: WindowMode; windowResizeRevision?: number; windowPlacement?: WindowPlacement; viewport: DisplaySize }) => void): () => void;
       setToolbar(toolbar: Toolbar | null): Promise<void>;
-      resizeWindow(size: { width: number; height: number; restore?: boolean; maximumSize?: DisplaySize | null; restorePlacement?: WindowPlacement }): Promise<void>;
+      resizeWindow(size: { width: number; height: number; restore?: boolean; maximizable?: boolean; maximumSize?: DisplaySize | null; restorePlacement?: WindowPlacement }): Promise<void>;
       onToolbarAction(listener: (id: string) => void | Promise<void>): () => void;
       getLanguageResources(): Promise<{ resources: Record<string, Record<string, unknown>>; errors: string[] }>;
       openView(options: { instanceId: string; location: 'sidebar' | 'window'; title?: string; icon?: string }): Promise<void>;
@@ -195,6 +195,8 @@ let pendingWindowState: ReturnType<typeof windowStateSample>;
 let savedWindowState = '';
 let fitScheduled = false;
 const adaptiveEnabled = () => !!(location === 'window' ? connectionProfile?.adaptiveWindow : connectionProfile?.adaptiveSidebar);
+// Keep the macOS green fullscreen control; Windows uses the shared toolbar.
+const windowModeOptions = navigator.userAgent.includes('Windows') ? { maximizable: false } : {};
 let resizeFailure = '';
 let resizeSupported = false;
 let adaptivePending = false;
@@ -301,7 +303,7 @@ async function resizeDesktopWindow(size: DisplaySize): Promise<boolean> {
     if (context.phase !== 'active' || context.location !== 'window' || handoff || closing) return false;
     const insets = desktopInsets();
     const viewport = { width: size.width + insets.width, height: size.height + insets.height };
-    await window.anas.resizeWindow({ ...viewport, restore: true, maximumSize: adaptiveEnabled() ? null : viewport });
+    await window.anas.resizeWindow({ ...viewport, ...windowModeOptions, restore: true, maximumSize: adaptiveEnabled() ? null : viewport });
     const fitted = await window.anas.getContext();
     hostViewport = fitted.viewport; windowResizeRevision = fitted.windowResizeRevision ?? 0;
     adaptedWindowRevision = windowResizeRevision;
@@ -417,7 +419,7 @@ async function fitDesktopWindow(manual = false, preparing = false) {
     const maximum = { width: frameSize.width + insets.width, height: frameSize.height + insets.height };
     const targetSize = { width: Math.min(size.width + (viewport ? 0 : insets.width), adaptive ? Infinity : maximum.width),
       height: Math.min(size.height + (viewport ? 0 : insets.height), adaptive ? Infinity : maximum.height) };
-    await window.anas.resizeWindow({ ...targetSize, maximumSize: adaptive ? null : maximum, ...(manual || !adaptive ? { restore: true } : {}),
+    await window.anas.resizeWindow({ ...targetSize, ...windowModeOptions, maximumSize: adaptive ? null : maximum, ...(manual || !adaptive ? { restore: true } : {}),
       ...(remembered?.placement ? { restorePlacement: remembered.placement } : {}) });
     fittedDesktop = current; fittedWindowKey = key; windowFitReady = true;
     const fitted = await window.anas.getContext();
@@ -439,7 +441,7 @@ function connectionActions(windowActions = false): Toolbar['actions'] {
     ...(connected && clipboardEnabled && (downloadState?.offer || downloadState?.transfer?.state === 'running') ? [{ id: 'download', label: downloadLabel(), icon: 'assets/download.svg', disabled: downloadPending || downloadState.transfer?.state === 'running' || handoff || !ready }] : []),
     { id: 'reset-input', label: t('actions.reset_input'), icon: 'assets/input-reset.svg', disabled: !connected || inputResetPending || handoff || !ready },
     { id: 'input-text', label: t('actions.input_text'), icon: 'assets/keyboard.svg', disabled: !connected || uiLocked || handoff || !ready },
-    ...(location === 'window' && !dynamicResolutionAvailable() ? [{ id: 'fit-window', label: t('actions.fit_window'), icon: 'assets/scan.svg',
+    ...(location === 'window' && (adaptiveEnabled() || !windowFitReady) && !dynamicResolutionAvailable() ? [{ id: 'fit-window', label: t('actions.fit_window'), icon: 'assets/scan.svg',
       disabled: !connected || !desktop?.size || handoff || !ready }] : []),
     ...(connected && dynamicResolutionAvailable() && (!windowActions || location === 'window') ? [{ id: 'resolution-menu', icon: 'assets/resolution.svg',
       label: t(location === 'window' ? 'actions.window_resolution' : 'actions.desktop_resolution', { size: desktop?.size ? `${desktop.size.width} × ${desktop.size.height}` : '—' }),
@@ -460,7 +462,7 @@ function presentation() {
   element('move-window').toggleAttribute('hidden', instanceId === 'main' || location !== 'sidebar');
   element('download').toggleAttribute('hidden', !connected || !clipboardEnabled || (!downloadState?.offer && downloadState?.transfer?.state !== 'running'));
   element('resolution-menu').toggleAttribute('hidden', instanceId === 'main' || !connected || !dynamicResolutionAvailable());
-  element('fit-window').toggleAttribute('hidden', instanceId === 'main' || location !== 'window' || !!dynamicResolutionAvailable());
+  element('fit-window').toggleAttribute('hidden', instanceId === 'main' || location !== 'window' || (!adaptiveEnabled() && windowFitReady) || !!dynamicResolutionAvailable());
   for (const action of connectionActions()) {
     const button = element<HTMLButtonElement>(action.id);
     button.toggleAttribute('disabled', action.disabled);
@@ -1226,7 +1228,7 @@ window.anas.registerLifecycle({
         // the connection form for that desktop before the host first shows it.
         try {
           const size = { width: connectionProfile.desktopWidth ?? DEFAULT_DESKTOP_WIDTH, height: connectionProfile.desktopHeight ?? DEFAULT_DESKTOP_HEIGHT };
-          await window.anas.resizeWindow({ ...size, maximumSize: connectionProfile.adaptiveWindow ? null : size });
+          await window.anas.resizeWindow({ ...size, ...windowModeOptions, maximumSize: connectionProfile.adaptiveWindow ? null : size });
         }
         catch { failure('errors.window_size'); }
       } else await fitDesktopWindow(false, true);
@@ -1332,7 +1334,7 @@ try {
     const size = resolutionChoices().find(({ width, height }) => id === `resolution-${width}-${height}`);
     if (size) { await selectResolution(size); return; }
     if (id === 'adaptive-resolution') { await toggleAdaptive(); return; }
-    if (id === 'fit-window') { await fitDesktopWindow(true); return; }
+    if (id === 'fit-window') { if (connectionActions().some(action => action.id === id && !action.disabled)) await fitDesktopWindow(true); return; }
     if (id === 'download') { void startDownload(); return; }
     if (id === 'clipboard') { await toggleClipboard(); return; }
     if (id === 'ui-lock') { await toggleUiLock(); return; }
