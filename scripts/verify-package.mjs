@@ -22,7 +22,9 @@ mkdirSync(resolve(root, 'tmp'), { recursive: true });
 const extracted = mkdtempSync(resolve(root, 'tmp/package-check-'));
 if (process.platform === 'win32') {
   // Use an independent Windows extractor instead of validating tar with itself.
-  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$ErrorActionPreference = "Stop"; Expand-Archive -LiteralPath $env:RDP_VERIFY_ARCHIVE -DestinationPath $env:RDP_VERIFY_DIRECTORY'], {
+  // Call the .NET Framework API directly: an inherited PowerShell 7 module path
+  // can make Windows PowerShell load an incompatible Microsoft.PowerShell.Archive.
+  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$ErrorActionPreference = "Stop"; Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory($env:RDP_VERIFY_ARCHIVE, $env:RDP_VERIFY_DIRECTORY)'], {
     stdio: 'inherit', env: { ...process.env, RDP_VERIFY_ARCHIVE: archive, RDP_VERIFY_DIRECTORY: extracted }
   });
 } else execFileSync(tar, ['-xf', archive, '-C', extracted], { stdio: 'inherit' });
