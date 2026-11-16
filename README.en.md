@@ -2,11 +2,13 @@
 
 [简体中文](README.md)
 
+With window adaptation disabled, the window can shrink but cannot grow beyond the actual remote desktop size. Enabling adaptation removes the limit. This behavior requires Anas 5.2.10 or later with `resizeWindow.maximumSize` support.
+
 Use a Windows remote desktop in an Anas sidebar or separate window. A pinned native IronRDP engine owns the connection and framebuffer in the plugin backend; pages provide canvas display and keyboard/mouse input. No separate gateway is required.
 
 The desktop displays the remote cursor, including movement from model tools. Model moves use a short local animation without adding remote mouse events or changing screenshots. The server editor offers “Disable mouse animation”, unchecked by default. Local movement appears immediately, and the cursor stays at its last position when the local pointer leaves. Locking local input keeps the remote cursor visible; unknown positions and server-hidden cursors are not drawn.
 
-Requires **Anas 4.0.4 or later** (plugin API 2), which provides the titlebar menus, window state, fitting-before-activation, directory selection and file reveal APIs used by this plugin. Upgrade the host before installing the plugin.
+Requires **Anas 5.2.10 or later** (plugin API 2), which provides the titlebar menus, window state, fitting-before-activation, directory selection and file reveal APIs used by this plugin. Upgrade the host before installing the plugin.
 
 Moving rebuilds the presentation while retaining the original connection and unsaved input. Closing a desktop tab or window always keeps its connection in the background; there is no background-running option. Resuming the desktop reuses that connection. Explicit Disconnect, including the server context menu, and tool state `closed` end the connection and close the desktop. Only unexpected disconnections retain the desktop and reconnect controls. Connections are independent of conversations. The sidebar toolbar’s Move to separate window icon moves the desktop directly. The context menu can also choose a sidebar or window. Opening and moving do not write configuration; a new desktop without an explicit location uses the saved preference. Open desktops and running connections block profile editing. Stopping the plugin or quitting the host ends its connections.
 

@@ -24,7 +24,7 @@ declare global {
       getInfo(): Promise<{ language: string; theme: string; fontSize: number; view: { instanceId: string; location: 'sidebar' | 'window' } }>;
       onViewChanged(listener: (view: { instanceId: string; location: 'sidebar' | 'window'; activity?: { visible: boolean; active: boolean }; windowMode?: WindowMode; windowResizeRevision?: number; windowPlacement?: WindowPlacement; viewport: DisplaySize }) => void): () => void;
       setToolbar(toolbar: Toolbar | null): Promise<void>;
-      resizeWindow(size: { width: number; height: number; restore?: boolean; restorePlacement?: WindowPlacement }): Promise<void>;
+      resizeWindow(size: { width: number; height: number; restore?: boolean; maximumSize?: DisplaySize | null; restorePlacement?: WindowPlacement }): Promise<void>;
       onToolbarAction(listener: (id: string) => void | Promise<void>): () => void;
       getLanguageResources(): Promise<{ resources: Record<string, Record<string, unknown>>; errors: string[] }>;
       openView(options: { instanceId: string; location: 'sidebar' | 'window'; title?: string; icon?: string }): Promise<void>;
@@ -179,6 +179,7 @@ let toolbarRevision = 0;
 let toolbarReady = false;
 let toolbarUpdate: Promise<void> = Promise.resolve();
 let fittedDesktop: Desktop | undefined;
+let fittedWindowKey = '';
 let windowFitReady = false;
 let windowMode: WindowMode | undefined;
 let windowResizeRevision = 0;
@@ -250,6 +251,7 @@ function reportResizeError(error: string) {
   const code = error.includes('RDP_RESIZE_UNSUPPORTED') ? 'RDP_RESIZE_UNSUPPORTED' : 'RDP_RESIZE_FAILED';
   if (resizeFailure === code) return;
   resizeFailure = code;
+  fittedWindowKey = '';
   element('resize-warning').hidden = false;
   element('resize-warning').textContent = t(code === 'RDP_RESIZE_UNSUPPORTED' ? 'errors.resize_unsupported' : 'errors.resize_failed');
   adaptiveResolution.suspend();
@@ -288,7 +290,7 @@ async function selectResolution(size: DisplaySize) {
   selectingResolution = true; presentation();
   try {
     if (location === 'window' && !await resizeDesktopWindow(size)) return;
-    await adaptiveResolution.request(size);
+    if (!await adaptiveResolution.request(size) && location === 'window' && !adaptiveEnabled()) fittedWindowKey = '';
   } finally { selectingResolution = false; if (!closing) presentation(); }
 }
 async function resizeDesktopWindow(size: DisplaySize): Promise<boolean> {
@@ -298,8 +300,8 @@ async function resizeDesktopWindow(size: DisplaySize): Promise<boolean> {
     const context = await window.anas.getContext();
     if (context.phase !== 'active' || context.location !== 'window' || handoff || closing) return false;
     const insets = desktopInsets();
-    await window.anas.resizeWindow({ width: size.width + insets.width,
-      height: size.height + insets.height, restore: true });
+    const viewport = { width: size.width + insets.width, height: size.height + insets.height };
+    await window.anas.resizeWindow({ ...viewport, restore: true, maximumSize: adaptiveEnabled() ? null : viewport });
     const fitted = await window.anas.getContext();
     hostViewport = fitted.viewport; windowResizeRevision = fitted.windowResizeRevision ?? 0;
     adaptedWindowRevision = windowResizeRevision;
@@ -395,34 +397,39 @@ function scheduleWindowState() {
 }
 async function fitDesktopWindow(manual = false, preparing = false) {
   const current = desktop;
-  if (!current?.size || !connected || !ready || !toolbarReady || (handoff && !preparing) || closing || location !== 'window' || fitScheduled) return;
-  if (!manual && current === fittedDesktop) return;
+  if (!current?.size || !connected || !ready || !toolbarReady || (handoff && !preparing) || closing || location !== 'window' || fitScheduled || selectingResolution || resizingWindow) return;
+  const adaptive = adaptiveEnabled(), frameSize = { ...current.size };
+  const key = adaptive ? 'adaptive' : `fixed:${frameSize.width}:${frameSize.height}`;
+  if (!manual && current === fittedDesktop && fittedWindowKey === key) return;
   fitScheduled = true; windowFitReady = false; adaptiveResolution.suspend(); connectionOperations++;
   try {
     if (manual && errorKey === 'errors.window_size') { errorKey = undefined; renderError(); }
     if (!preparing) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
     const context = await window.anas.getContext();
     if (context.phase !== (preparing ? 'preparing' : 'active') || context.location !== 'window' || current !== desktop || (handoff && !preparing) || closing || !connected) return;
-    // New pages restore the normal viewport, or use the profile's configured size.
-    // A sidebar's current frame must never decide the initial separate-window size.
+    // Fixed windows may restore a smaller viewport, but never grow beyond the
+    // actual remote desktop. Adaptive windows retain their independent size.
     const remembered = manual ? null : await window.anas.backend.call('windowState.get', { owner, id: session!.id }) as WindowState | null;
-    const size = remembered ?? (manual ? current.size! : { width: connectionProfile?.desktopWidth ?? DEFAULT_DESKTOP_WIDTH, height: connectionProfile?.desktopHeight ?? DEFAULT_DESKTOP_HEIGHT });
+    const viewport = !manual ? (current === fittedDesktop ? normalWindowViewport ?? hostViewport : remembered) : undefined;
+    const size = viewport ?? (manual || !adaptive ? frameSize : { width: connectionProfile?.desktopWidth ?? DEFAULT_DESKTOP_WIDTH, height: connectionProfile?.desktopHeight ?? DEFAULT_DESKTOP_HEIGHT });
     if (current !== desktop || (handoff && !preparing) || closing || !connected) return;
     const insets = desktopInsets();
-    await window.anas.resizeWindow({ width: size.width + (remembered ? 0 : insets.width),
-      height: size.height + (remembered ? 0 : insets.height), ...(manual ? { restore: true } : {}),
+    const maximum = { width: frameSize.width + insets.width, height: frameSize.height + insets.height };
+    const targetSize = { width: Math.min(size.width + (viewport ? 0 : insets.width), adaptive ? Infinity : maximum.width),
+      height: Math.min(size.height + (viewport ? 0 : insets.height), adaptive ? Infinity : maximum.height) };
+    await window.anas.resizeWindow({ ...targetSize, maximumSize: adaptive ? null : maximum, ...(manual || !adaptive ? { restore: true } : {}),
       ...(remembered?.placement ? { restorePlacement: remembered.placement } : {}) });
-    fittedDesktop = current; windowFitReady = true;
+    fittedDesktop = current; fittedWindowKey = key; windowFitReady = true;
     const fitted = await window.anas.getContext();
     hostViewport = fitted.viewport; windowResizeRevision = fitted.windowResizeRevision ?? 0;
-    normalWindowViewport = { width: size.width + (remembered ? 0 : insets.width), height: size.height + (remembered ? 0 : insets.height), revision: windowResizeRevision };
+    normalWindowViewport = { ...targetSize, revision: windowResizeRevision };
     if (!preparing && adaptiveEnabled() && dynamicResolutionAvailable()) {
       adaptedWindowRevision = windowResizeRevision;
-      const target = remembered ? viewportResolution(size.width - insets.width, size.height - insets.height) : size;
+      const target = viewport ? viewportResolution(size.width - insets.width, size.height - insets.height) : size;
       if (target) await adaptiveResolution.request(target);
     }
   } catch {
-    if (current === desktop && !closing && (!handoff || preparing)) { fittedDesktop = current; failure('errors.window_size'); }
+    if (current === desktop && !closing && (!handoff || preparing)) { fittedDesktop = current; fittedWindowKey = key; failure('errors.window_size'); }
   } finally { fitScheduled = false; connectionOperations--; presentation(); }
 }
 function connectionActions(windowActions = false): Toolbar['actions'] {
@@ -1217,7 +1224,10 @@ window.anas.registerLifecycle({
       if (!desktop?.size && location === 'window' && connectionProfile && toolbarReady) {
         // The connected window has no plugin chrome around its desktop. Size
         // the connection form for that desktop before the host first shows it.
-        try { await window.anas.resizeWindow({ width: connectionProfile.desktopWidth ?? DEFAULT_DESKTOP_WIDTH, height: connectionProfile.desktopHeight ?? DEFAULT_DESKTOP_HEIGHT }); }
+        try {
+          const size = { width: connectionProfile.desktopWidth ?? DEFAULT_DESKTOP_WIDTH, height: connectionProfile.desktopHeight ?? DEFAULT_DESKTOP_HEIGHT };
+          await window.anas.resizeWindow({ ...size, maximumSize: connectionProfile.adaptiveWindow ? null : size });
+        }
         catch { failure('errors.window_size'); }
       } else await fitDesktopWindow(false, true);
     }

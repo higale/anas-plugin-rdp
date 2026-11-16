@@ -1521,13 +1521,13 @@ test('reset input prevents duplicate clicks, reports failures and permits an exp
 });
 
 
-test('a new window uses the configured size and later frames never override manual window sizing', async t => {
+test('a fixed-resolution window caps its viewport at the remote frame and updates the limit after handoff', async t => {
   const ui = await fixture(t, { location: 'window', profile: { desktopWidth: 1920, desktopHeight: 1080 } });
-  assert.deepEqual({ ...ui.calls.find(call => call.method === 'resizeWindow').params }, { width: 1920, height: 1080 });
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.calls.find(call => call.method === 'resizeWindow').params)), { width: 1920, height: 1080, maximumSize: { width: 1920, height: 1080 } });
   ui.element('session-password').value = 'fixture'; ui.submit();
   await until(() => ui.calls.some(call => call.method === 'resizeWindow' && call.phase === 'active'));
   const sizes = () => ui.calls.filter(call => call.method === 'resizeWindow' && call.phase === 'active');
-  assert.deepEqual({ ...sizes()[0].params }, { width: 1944, height: 1104 });
+  assert.deepEqual(JSON.parse(JSON.stringify(sizes()[0].params)), { width: 1048, height: 792, restore: true, maximumSize: { width: 1048, height: 792 } });
   ui.window.__remoteSize(1024, 768);
   await new Promise(resolve => setTimeout(resolve, 350));
   assert.equal(sizes().length, 1, 'Repeated frames must not override manual resizing');
@@ -1538,7 +1538,9 @@ test('a new window uses the configured size and later frames never override manu
   assert.equal(sizes().length, 1, 'A source handing off cannot resize');
   await ui.lifecycle().resume({ signal: new ui.window.AbortController().signal });
   await new Promise(resolve => setTimeout(resolve, 40));
-  assert.equal(sizes().length, 1, 'Resuming a failed handoff preserves the source window size');
+  assert.equal(sizes().length, 2, 'Resuming applies the new frame limit');
+  assert.deepEqual({ ...sizes()[1].params.maximumSize }, { width: 1304, height: 824 });
+  assert.equal(sizes()[1].params.width, 1048, 'Growing the remote frame preserves the smaller local viewport');
   const sidebar = await fixture(t);
   sidebar.element('session-password').value = 'fixture'; sidebar.submit();
   await until(() => sidebar.window.document.body.dataset.connected === 'true');
@@ -1552,6 +1554,32 @@ test('failed window fitting reports the error without disconnecting the desktop'
   await until(() => ui.element('error-message').textContent.includes('fit the window'));
   assert.equal(ui.window.document.body.dataset.connected, 'true');
   assert.equal(ui.calls.some(call => ['disconnect', 'server.close'].includes(call.method)), false);
+});
+
+test('fixed windows retain a smaller viewport, clamp stale sizes and release the cap when adaptation is enabled', async t => {
+  let remembered = { width: 1800, height: 1200 };
+  const ui = await fixture(t, { location: 'window', windowState: { get: () => remembered, set: value => { remembered = { width: value.width, height: value.height }; } } });
+  ui.submit();
+  const fits = () => ui.calls.filter(call => call.method === 'resizeWindow' && call.phase === 'active');
+  await until(() => fits().length === 1);
+  assert.deepEqual({ ...fits()[0].params.maximumSize }, { width: 1048, height: 792 });
+  assert.equal(fits()[0].params.width, 1048, 'A stale oversized window is clamped to the actual desktop');
+  ui.element('desktop').getBoundingClientRect = () => ({ width: 700, height: 500 }); ui.window.__resizeDesktop();
+  await until(() => remembered.width === 724);
+  assert.equal(fits().length, 1, 'User shrinking must not trigger a fit back to full size');
+  assert.equal(ui.calls.some(call => call.method === 'resize'), false, 'Shrinking a fixed desktop does not change remote resolution');
+  const restore = await ui.lifecycle().prepare({ signal: new ui.window.AbortController().signal });
+  const reopened = await fixture(t, { location: 'window', restore, windowState: { get: () => remembered } });
+  const restoredFit = reopened.calls.find(call => call.method === 'resizeWindow').params;
+  assert.deepEqual([restoredFit.width, restoredFit.height], [724, 524]);
+  assert.deepEqual({ ...restoredFit.maximumSize }, { width: 1048, height: 792 });
+  await reopened.action('adaptive-resolution');
+  await until(() => reopened.calls.filter(call => call.method === 'resizeWindow').at(-1).params.maximumSize === null);
+  await reopened.action('adaptive-resolution');
+  await until(() => reopened.calls.filter(call => call.method === 'resizeWindow').at(-1).params.maximumSize !== null);
+  reopened.window.__remoteSize(600, 400);
+  await until(() => reopened.calls.filter(call => call.method === 'resizeWindow').at(-1).params.maximumSize?.width === 624);
+  assert.equal(reopened.calls.filter(call => call.method === 'resizeWindow').at(-1).params.width, 624);
 });
 
 test('the window fit button can refit the same desktop and retry a failed automatic fit without reconnecting', async t => {
@@ -1569,7 +1597,7 @@ test('the window fit button can refit the same desktop and retry a failed automa
   assert.equal(ui.element('error').hidden, true);
   const sizes = ui.calls.filter(call => call.method === 'resizeWindow' && call.phase === 'active');
   assert.equal(sizes.length, 3);
-  assert.equal(sizes[0].params.restore, undefined);
+  assert.equal(sizes[0].params.restore, true);
   assert.equal(sizes[1].params.restore, true);
   assert.equal(sizes[2].params.restore, true);
   assert.equal(ui.calls.some(call => ['disconnect', 'server.close'].includes(call.method)), false);
@@ -1741,7 +1769,7 @@ test('adaptive detached windows expose size choices, restore the window on selec
   assert.equal(ui.toolbar().actions.some(action=>action.id==='fit-window'),false);
   const menu = ui.toolbar().actions.find(action=>action.id==='resolution-menu'); assert.equal(menu.items.length,6);
   await ui.action('resolution-1280-800');
-  assert.deepEqual({ ...ui.calls.filter(call=>call.method==='resizeWindow').at(-1).params },{ width:1304,height:824,restore:true });
+  assert.deepEqual({ ...ui.calls.filter(call=>call.method==='resizeWindow').at(-1).params },{ width:1304,height:824,restore:true,maximumSize:null });
   assert.equal(ui.calls.some(call=>call.method==='profiles.save'),false);
   ui.move('sidebar'); await new Promise(resolve => setTimeout(resolve, 400));
   assert.equal(ui.calls.filter(call => call.method === 'resize').length, 2, 'Only initial adaptation and the manual size are sent; the sidebar keeps that size');
@@ -1755,7 +1783,7 @@ test('adaptive windows use the profile size instead of the sidebar frame and wai
   assert.equal(ui.calls.some(call => ['resize', 'resizeWindow'].includes(call.method) && call.phase !== 'preparing'), false, 'Wait for the actual first frame before adapting');
   ui.window.__remoteSize(400, 700);
   await until(() => ui.calls.some(call => call.method === 'resizeWindow' && call.phase === 'active'));
-  assert.deepEqual({ ...ui.calls.find(call => call.method === 'resizeWindow' && call.phase === 'active').params }, { width: 1304, height: 824 });
+  assert.deepEqual({ ...ui.calls.find(call => call.method === 'resizeWindow' && call.phase === 'active').params }, { width: 1304, height: 824, maximumSize: null });
   await new Promise(resolve => setTimeout(resolve, 350));
   assert.equal(ui.calls.some(call => call.method === 'resize'), false, 'The default window size cannot override the initial resolution');
   ui.element('desktop').getBoundingClientRect = () => ({ width: 1280, height: 800 });
@@ -1833,7 +1861,7 @@ test('normal window size survives handoff and background closure, independently 
     assert.deepEqual(size, { width: 1224, height: 874 }, 'Preparation cannot overwrite saved dimensions');
   } });
   await until(() => moved.calls.some(call => call.method === 'resizeWindow'));
-  assert.deepEqual({ ...moved.calls.find(call => call.method === 'resizeWindow').params }, { width: 1224, height: 874 });
+  assert.deepEqual({ ...moved.calls.find(call => call.method === 'resizeWindow').params }, { width: 1224, height: 874, maximumSize: null });
   await new Promise(resolve => setTimeout(resolve, 350));
   assert.deepEqual(size, { width: 1224, height: 874 }, 'The default target window cannot overwrite saved dimensions before fitting');
   moved.element('desktop').getBoundingClientRect = () => ({ width: 1200, height: 850 }); moved.window.__resizeDesktop();
@@ -1847,7 +1875,7 @@ test('normal window size survives handoff and background closure, independently 
   assert.deepEqual(size, { width: 1224, height: 874 });
   const reopened = await fixture(t, { location: 'window', windowState: memory, profile: restore.view.profile, find: () => restore.session });
   await until(() => reopened.calls.some(call => call.method === 'resizeWindow'));
-  assert.deepEqual({ ...reopened.calls.find(call => call.method === 'resizeWindow').params }, { width: 1224, height: 874 });
+  assert.deepEqual({ ...reopened.calls.find(call => call.method === 'resizeWindow').params }, { width: 1224, height: 874, maximumSize: null });
   assert.equal(reopened.calls.some(call => call.method === 'create'), false, 'Reopening attaches to the live session');
 });
 
@@ -1865,7 +1893,7 @@ test('fractional parent allocation wins over an outward-rounded iframe desktop',
   const request = ui.calls.filter(call => call.method === 'resize').at(-1).params;
   assert.equal(request.height, 900);
   await ui.action('resolution-1600-900');
-  assert.deepEqual({ ...ui.calls.filter(call => call.method === 'resizeWindow').at(-1).params }, { width: 1600, height: 900, restore: true });
+  assert.deepEqual({ ...ui.calls.filter(call => call.method === 'resizeWindow').at(-1).params }, { width: 1600, height: 900, restore: true, maximumSize: null });
   await new Promise(resolve => setTimeout(resolve, 400));
   assert.equal(ui.calls.filter(call => call.method === 'resize').at(-1).params.height, 900);
 });
@@ -1908,9 +1936,9 @@ test('cross-DPI child layout cannot resize the remote desktop or overwrite nativ
   // Closing during the transition preserves the last deliberate size.
   await ui.lifecycle().dispose({ signal: new ui.window.AbortController().signal, reason: 'closed' });
   assert.deepEqual(size, savedSize);
-  const reopened = await fixture(t, { location: 'window', windowState: memory, find: () => ({ id: 'retained', url: 'ws://fixture', token: 'token' }) });
+  const reopened = await fixture(t, { location: 'window', profile: { adaptiveWindow: true }, windowState: memory, find: () => ({ id: 'retained', url: 'ws://fixture', token: 'token' }) });
   await until(() => reopened.calls.some(call => call.method === 'resizeWindow'));
-  assert.deepEqual({ ...reopened.calls.find(call => call.method === 'resizeWindow').params }, size);
+  assert.deepEqual({ ...reopened.calls.find(call => call.method === 'resizeWindow').params }, { ...size, maximumSize: null });
 });
 
 test('a failed window restoration preserves memory and pauses adaptive resize until an explicit retry', async t => {
@@ -1941,7 +1969,7 @@ test('cancelled handoff retries an interrupted initial size restore on the origi
   assert.equal(ui.calls.some(call => call.method === 'resizeWindow' && call.phase === 'active'), false);
   await ui.lifecycle().resume({ signal: new ui.window.AbortController().signal });
   await until(() => ui.calls.some(call => call.method === 'resizeWindow' && call.phase === 'active'));
-  assert.deepEqual({ ...ui.calls.find(call => call.method === 'resizeWindow' && call.phase === 'active').params }, { width: 1304, height: 824 });
+  assert.deepEqual({ ...ui.calls.find(call => call.method === 'resizeWindow' && call.phase === 'active').params }, { width: 1304, height: 824, maximumSize: null });
 });
 
 test('continuous display updates do not postpone remembering a resized window', async t => {
@@ -1980,7 +2008,7 @@ test('window placement is remembered on movement and refreshed on close before t
   const restored = await fixture(t, { location: 'window', windowState: memory, find: () => ({ id: 'retained', url: 'ws://fixture', token: 'token' }) });
   await until(() => restored.calls.some(call => call.method === 'resizeWindow'));
   const request = JSON.parse(JSON.stringify(restored.calls.find(call => call.method === 'resizeWindow').params));
-  assert.deepEqual(request, { width: 1024, height: 768, restorePlacement: { displayId: 9, x: 350, y: 90 } });
+  assert.deepEqual(request, { width: state.width, height: state.height, restore: true, maximumSize: { width: 1048, height: 792 }, restorePlacement: { displayId: 9, x: 350, y: 90 } });
   assert.equal(restored.calls.some(call => ['create', 'disconnect', 'profiles.save'].includes(call.method)), false);
 });
 
@@ -2033,7 +2061,7 @@ test('sidebar resolution menu includes the custom profile size and changes only 
   assert.deepEqual(remembered, { width: 1200, height: 850 });
   const reopened = await fixture(t, { location: 'window', restore, windowState: memory });
   await until(() => reopened.calls.some(call => call.method === 'resizeWindow'));
-  assert.deepEqual({ ...reopened.calls.find(call => call.method === 'resizeWindow').params }, { width: 1200, height: 850 },
+  assert.deepEqual({ ...reopened.calls.find(call => call.method === 'resizeWindow').params }, { width: 1200, height: 850, maximumSize: null },
     'Restore the complete remembered window viewport, independently of the sidebar resolution');
 });
 
@@ -2057,6 +2085,18 @@ test('sidebar resolution selection reports a busy rejection and clears it after 
   assert.equal(ui.calls.filter(call => call.method === 'resize').length, 2);
 });
 
+test('a rejected fixed-window resolution restores the actual frame size limit', async t => {
+  const ui = await fixture(t, { location: 'window', remoteResize: () => { throw new Error('RDP_INPUT_BUSY'); } });
+  ui.submit(); await until(() => ui.toolbar().actions.some(action => action.id === 'resolution-menu' && !action.disabled));
+  await ui.action('resolution-1600-900');
+  await until(() => ui.calls.filter(call => call.method === 'resizeWindow').at(-1)?.params.maximumSize?.width === 1048);
+  const fitted = ui.calls.filter(call => call.method === 'resizeWindow').at(-1).params;
+  assert.equal(fitted.width, 1048);
+  assert.equal(fitted.maximumSize.height, 792);
+  assert.equal(ui.calls.filter(call => call.method === 'resize').length, 1);
+  assert.equal(ui.element('error').hidden, false);
+});
+
 test('window menu includes a custom configured size and restores the normal window when selected', async t => {
   const ui = await fixture(t, { location: 'window', profile: { adaptiveWindow: true, desktopWidth: 1536, desktopHeight: 864 } });
   ui.submit(); await until(() => ui.calls.some(call => call.method === 'resize'));
@@ -2065,7 +2105,7 @@ test('window menu includes a custom configured size and restores the normal wind
   assert.equal(menu.items.filter(item => item.id === 'resolution-1536-864').length, 1);
   assert.equal(menu.items.find(item => item.id === 'resolution-1536-864').label, '1536 × 864 (default)');
   await ui.action('resolution-1536-864');
-  assert.deepEqual({ ...ui.calls.filter(call => call.method === 'resizeWindow').at(-1).params }, { width: 1560, height: 888, restore: true });
+  assert.deepEqual({ ...ui.calls.filter(call => call.method === 'resizeWindow').at(-1).params }, { width: 1560, height: 888, restore: true, maximumSize: null });
   assert.equal(ui.calls.some(call => call.method === 'profiles.save'), false);
 });
 

@@ -1,33 +1,25 @@
-# Anas RDP v0.1.11
+# Anas RDP v0.1.12
 
 ## 简体中文
 
-需要 **Anas 4.0.4 或更新版本**（插件 API 2）。
+需要 **Anas 5.2.10 或更新版本**（插件 API 2）。本轮新增窗口上限接口依赖，请同时更新宿主与插件。
 
-- 修复侧栏按钮悬停提示偶发不显示：插件页面统一使用 DOM 提示，支持键盘聚焦、动态文字和页面边缘避让，并在点击、移出、菜单、Esc、失焦及页面关闭时清理。
-- 将画面／光标更新与控件状态通知分开；状态不变的下载轮询不刷新界面，单项操作只更新受影响的按钮属性。
-- 保留协议版本推进和迟到回执保护，补充提示生命周期、连续画面更新与按钮刷新回归测试。
+- 关闭独立窗口自适应时，允许手动缩小，放大上限跟随实际远端画面；开启自适应后解除上限及最大化／全屏限制。
+- 保留缩小后的窗口尺寸，重新打开或在侧栏与窗口间移动时恢复；远端分辨率变化时更新上限，调整失败时恢复实际画面的限制。
+- 配套宿主修复应用缩放、小画面及 macOS 自适应切换中的窗口约束问题。此次不改变已保存的连接配置或数据格式。
 
-下载 `anas-rdp-0.1.11-universal.zip`，从 Anas「设置 → 插件」覆盖安装。同一包支持 Windows x64、macOS Apple Silicon 和 Intel；校验值见 `SHA256SUMS.txt`。
+从 Anas「设置 → 插件」覆盖安装 `anas-rdp-0.1.12-universal.zip`。同一包支持 Windows x64、macOS Apple Silicon 和 Intel；校验值见 `SHA256SUMS.txt`。
 
-本轮 160 项 UI／桌面测试、类型检查和本机构建通过。macOS Electron 真实连接中验证了 7 个按钮连续 3 轮悬停、中英文明暗主题、窗口往返及停止连接；Windows tooltip 尚未实测。CI 构建和包内自检不代替真实远端或各平台交互验收。
-
-仍为预览版。Apple Silicon 未实机验证，macOS 程序未公证；Finder 直接粘贴远端文件未实现，最终“直接保存到所选目录”下载流程、Windows 多连接剪贴板及 Explorer 粘贴／取消仍需补充实机验证。完整范围见[测试说明](https://github.com/higale/anas-plugin-rdp/blob/main/docs/TESTING.md)。
-
-若同时从 Anas 4.0 之前版本升级宿主，请先阅读 [4.x 升级数据说明](https://github.com/higale/anas-agent/blob/main/data/help/UPGRADE_TO_4.zh-CN.md)，了解历史数据布局变化；这不是本次插件更新新增的数据变更。
+相关行为测试、类型检查、本机构建和包内自检通过。Windows Electron 使用模拟远端画面验证窗口上限、缩小、缩放、自适应切换和侧栏往返；用户反馈 macOS 上切换自适应已恢复正常。上述结果不代表完整的真实远端或跨平台验收。本插件仍为预览版，macOS 程序未公证；其余验证范围见[测试说明](https://github.com/higale/anas-plugin-rdp/blob/main/docs/TESTING.md)。
 
 ## English
 
-Requires **Anas 4.0.4 or later** (plugin API 2).
+Requires **Anas 5.2.10 or later** (plugin API 2). This update depends on the new window-size limit API; update both the host and the plugin.
 
-- Fix intermittent sidebar button tooltips with document-local DOM tooltips, including keyboard focus, changing labels, viewport edge placement, and cleanup on clicks, pointer exit, menus, Escape, blur, and page disposal.
-- Separate desktop/cursor updates from control-state notifications. Unchanged download polls no longer refresh the UI, and individual actions update only affected button attributes.
-- Preserve protocol revision tracking and stale-receipt protection, with regression coverage for tooltip lifecycle, continuous display updates, and button mutations.
+- With separate-window adaptation disabled, allow manual shrinking and cap enlargement at the actual remote desktop size. Enabling adaptation removes the size limit and restores maximize/fullscreen support.
+- Retain smaller window sizes across reopening and sidebar/window handoffs. Update limits when the remote resolution changes and restore the actual-frame limit after a failed resolution change.
+- The matching host fixes window constraints during application zoom, with small desktops, and when toggling adaptation on macOS. Saved connection configuration and data formats are unchanged.
 
-Install `anas-rdp-0.1.11-universal.zip` over the existing plugin from Anas Settings → Plugins. One package supports Windows x64, Apple Silicon Macs, and Intel Macs; see `SHA256SUMS.txt` for checksums.
+Install `anas-rdp-0.1.12-universal.zip` over the existing plugin from Anas Settings → Plugins. One package supports Windows x64, Apple Silicon Macs, and Intel Macs; see `SHA256SUMS.txt` for checksums.
 
-All 160 UI/desktop tests, type checking, and the local build passed. Live macOS Electron checks covered three hover rounds over seven buttons, Chinese/English and light/dark themes, window handoff, and connection shutdown. Windows tooltips have not been tested on hardware. CI builds and package self-tests do not replace live remote or platform interaction testing.
-
-This remains a preview. Apple Silicon has not been tested on hardware, and macOS builds are not notarized. Direct remote-file paste into Finder is not implemented. The final download flow that saves directly into the chosen directory, Windows multi-connection clipboard behavior, and Explorer paste/cancel still need further live testing. See [testing notes](https://github.com/higale/anas-plugin-rdp/blob/main/docs/TESTING.md) for the full scope.
-
-If also upgrading the host from Anas versions before 4.0, read the [4.x data upgrade notes](https://github.com/higale/anas-agent/blob/main/data/help/UPGRADE_TO_4.en.md) for historical layout changes; these are not new data changes introduced by this plugin update.
+Relevant behavior tests, type checking, local builds, and package self-tests passed. Windows Electron checks used a synthetic remote display to verify size limits, shrinking, zoom, adaptation toggles, and sidebar handoffs. The user reported that adaptation toggles now work on macOS. These results do not constitute complete live remote or cross-platform acceptance. This remains a preview, and macOS builds are not notarized; see [testing notes](https://github.com/higale/anas-plugin-rdp/blob/main/docs/TESTING.md) for other validation limits.
