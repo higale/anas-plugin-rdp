@@ -2,7 +2,7 @@
 
 ## 边界与依赖
 
-宿主提供普通窗口、隔离 iframe、稳定面板身份和异步交接；不理解 RDP。插件仅使用公开 `window.anas` 接口，最低要求 Anas 5.2.10（插件 API 2）。依赖标题栏 `items` 菜单及 `separatorBefore` 分组、`onViewChanged.activity/windowMode/windowPlacement/viewport` 通知、准备阶段 `resizeWindow`、`resizeWindow.maximumSize` 内容尺寸上限与激活后显示窗口、包内图标、后台 `host.onViewsChanged` 活动订阅、`host.closeView` 指定实例关闭及 `tempDirectory` 临时目录。使用 API 2 页面交接与指定实例移动，无 API 1 兼容分支。
+宿主提供普通窗口、隔离 iframe、稳定面板身份和异步交接；不理解 RDP。插件仅使用公开 `window.anas` 接口，最低要求 Anas 5.2.12（插件 API 2）。依赖标题栏 `items` 菜单及 `separatorBefore` 分组、`onViewChanged.activity/windowMode/windowPlacement/viewport` 通知、准备阶段 `resizeWindow`、`resizeWindow.maximumSize` 内容尺寸上限与激活后显示窗口、包内图标、后台 `host.onViewsChanged` 活动订阅、`host.closeView` 指定实例关闭及 `tempDirectory` 临时目录。使用 API 2 页面交接与指定实例移动，无 API 1 兼容分支。
 
 IronRDP 固定为 `2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d`。`native/src/session.rs` 复用其 `RdpClient`；连接、认证、协议、解码及完整桌面画面均在原生进程。前端 `src/ui/desktop.ts` 仅绘制 canvas 并发送输入。页面重建与交接不停止 RDP 引擎；实际关闭桌面仅释放展示，连接保留在后台；不自动重连已结束的连接。
 
@@ -21,6 +21,8 @@ IronRDP 固定为 `2c08bda7c5f9ad490e01f123b3be5521cf3c6e9d`。`native/src/sessi
 `prepare` 冻结输入，等待保存、连接等操作完成，返回草稿、滚动位置、会话引用和租约。目标从 `getContext()` 主动读取恢复信息，附着原连接，等待首帧后 `ready()`；`activate` 原子接管输入。成功后旧页 `dispose` 只释放画布和订阅；失败先移除目标，再由原页 `resume` 重新取得租约。异步生命周期检查取消信号。恢复以交接快照为准，不依赖原服务器配置仍存在。回退时，仍在进行的连接操作负责自己的最终接管；已结束会话释放展示并恢复断开状态的控件。显示流单独丢失时重新附着原会话，不新建或终止 RDP 连接。
 
 后台保留最新完整 RGBA 帧；每个展示连接最多一帧待确认、最多约 30 fps，慢页跳过中间帧。图像限制为 16M 像素，读写有超时；输入拥塞不静默丢弃按键。当前完整帧传输尚未做差分压缩，高分辨率／高刷新负载需要实测。后台在没有页面时继续处理协议和画面。
+
+macOS 原生窗口移出后，Electron 42 可能未向隔离 iframe 路由 DOM 离开事件，系统光标恢复箭头而页面仍缓存 `cursor: none`，继续移动也不再触发原生更新。配套宿主从 `before-mouse-event.mouseLeave` 经 `anas.onPointerLeave` 通知当前可见插件页面；插件复用画布离开清理，重新进入／移动时按当前租约、输入锁及实际画面边界恢复光标。离开只清理本地悬停，不发送远端输入，不改变最后远端位置。依赖 Anas 5.2.12 新增的 `anas.onPointerLeave`；旧宿主仍可连接，但不能保证此项 macOS 修复生效。`npm run test:cursor` 在本机真实 Electron 中移动系统指针并读取 `NSCursor.currentSystem` 的透明度，覆盖独立窗口、侧栏、输入锁、交接及停止；DOM CSS 或网页截图不能代替这项验证。
 
 光标单独叠加在页面画面上，按桌面缩放、热点和边界裁切；默认箭头与工具截图复用原生位图。展示快照携带已知坐标，形状仅变化时发送，桌面图像仅帧版本变化时发送；位置变化沿用约 30 Hz、单条待确认及合并更新机制，不重传整张桌面。手动移动沿用原输入通道并立即更新本地图层；页面鼠标序号随已接受输入回传，迟到位置不覆盖尚未确认的新移动。移出后保留最后位置，锁定本地输入仍显示工具／远端更新；未知位置或远端隐藏时不画光标。新页面接入获取当前图像、形状与位置，不依赖旧页面。纯工具移动携带显示提示，前端以约 80–160 ms 动画插值；新目标替换当前动画，点击／滚轮及本地输入立即对齐。插值不发送输入、不延迟回执或改变截图；未知／隐藏位置及页面销毁取消动画，首次显示直接定位，并尊重系统减少动态效果偏好。
 

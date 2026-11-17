@@ -1,25 +1,25 @@
-# Anas RDP v0.1.13
+# Anas RDP v0.1.14
 
 ## 简体中文
 
-需要 **Anas 5.2.11 或更新版本**（插件 API 2）。本轮依赖宿主新增的最大化控制与窗口适配入口，请先更新宿主。
+需要 **Anas 5.2.12 或更新版本**（插件 API 2）。本次双光标修复依赖宿主新增的原生鼠标离开通知，请同时更新宿主和插件。
 
-- Windows 独立窗口隐藏并禁用系统最大化，保留最小化和关闭；macOS 保留原生绿色按钮，自适应开启时可进入系统全屏。
-- 窗口工具栏始终提供尺寸入口：自适应时进入／退出全屏，非自适应时通过不同图标恢复到允许的最大尺寸，并继续允许手动缩小。
-- 移除与宿主重复的适配按钮；初次适配失败，以及自适应窗口的动态分辨率不可用时，保留本地适配操作。
+- 修复 macOS 鼠标移出并重新进入窗口后，本地箭头未隐藏、持续显示双光标的问题；独立窗口和侧栏共用修复。
+- 重新进入画面时立即恢复光标位置和隐藏状态，并保留留白、输入锁定和页面交接的行为。
+- 优化分辨率图标，将输入文本图标换为更清晰的文字符号，适配明暗主题。
 
-从 Anas「设置 → 插件」覆盖安装 `anas-rdp-0.1.13-universal.zip`。同一包支持 Windows x64、macOS Apple Silicon 和 Intel；校验值见 `SHA256SUMS.txt`。
+从 Anas「设置 → 插件」覆盖安装 `anas-rdp-0.1.14-universal.zip`。同一包支持 Windows x64、macOS Apple Silicon 和 Intel；校验值见 `SHA256SUMS.txt`。
 
-Windows Electron 使用模拟远端画面验证窗口控制及全屏／适配行为；本轮 macOS 窗口交互和真实远端连接未实测。本插件仍为预览版，macOS 程序未公证；其他验证范围见[测试说明](https://github.com/higale/anas-plugin-rdp/blob/main/docs/TESTING.md)。
+本插件仍为预览版，macOS 程序未公证。此次 Windows 发布审核不代替 macOS 原生光标实机复测；验证方法见 `npm run test:cursor`，其他范围见[测试说明](https://github.com/higale/anas-plugin-rdp/blob/main/docs/TESTING.md)。
 
 ## English
 
-Requires **Anas 5.2.11 or later** (plugin API 2). This update depends on the host's new maximization control and window fitting action; upgrade the host first.
+Requires **Anas 5.2.12 or later** (plugin API 2). The double-cursor fix depends on the host's native pointer-exit notification; update both the host and plugin.
 
-- Hide and disable system maximization for separate Windows desktops while retaining minimize and close. Keep the native macOS green button for system fullscreen when adaptation is enabled.
-- Always provide a window size action: enter/exit fullscreen with adaptation enabled, or use a distinct icon to restore the allowed maximum size with adaptation disabled. Manual shrinking remains available.
-- Remove the duplicate fitting button. Retain local fitting after an initial fitting failure or when dynamic resolution is unavailable in adaptive windows.
+- Fix the local arrow remaining visible alongside the remote cursor after leaving and re-entering a window on macOS. The fix covers separate windows and the sidebar.
+- Restore cursor position and visibility immediately on re-entry while preserving letterboxing, input locks and page handoff behavior.
+- Refine the resolution icon and replace the text-input icon with a clearer text symbol, supporting light and dark themes.
 
-Install `anas-rdp-0.1.13-universal.zip` over the existing plugin from Anas Settings → Plugins. One package supports Windows x64, Apple Silicon Macs, and Intel Macs; see `SHA256SUMS.txt` for checksums.
+Install `anas-rdp-0.1.14-universal.zip` over the existing plugin from Anas Settings → Plugins. One package supports Windows x64, Apple Silicon Macs, and Intel Macs; see `SHA256SUMS.txt` for checksums.
 
-Windows Electron checks used a synthetic remote display to verify window controls and fullscreen/fitting behavior. macOS window interactions and live remote connections were not retested in this update. This remains a preview, and macOS builds are not notarized; see [testing notes](https://github.com/higale/anas-plugin-rdp/blob/main/docs/TESTING.md) for other validation limits.
+This remains a preview, and macOS builds are not notarized. The Windows release review does not replace a native macOS cursor retest; use `npm run test:cursor` for that check and see [testing notes](https://github.com/higale/anas-plugin-rdp/blob/main/docs/TESTING.md) for other validation limits.

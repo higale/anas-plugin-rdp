@@ -18,6 +18,7 @@ declare global {
       selectDirectory(options?: { title?: string }): Promise<string | null>;
       showItemInFolder(path: string): Promise<void>;
       getContext(): Promise<PageContext>;
+      onPointerLeave?(listener: () => void): () => void;
       registerLifecycle(handlers: { prepare(input: LifecycleInput): Promise<Restore>; activate(input: LifecycleInput): Promise<void>; resume(input: LifecycleInput): Promise<void>; dispose(input: LifecycleInput): Promise<void> }): void;
       ready(): Promise<void>;
       failed(): Promise<void>;
@@ -440,7 +441,7 @@ function connectionActions(windowActions = false): Toolbar['actions'] {
     ...(connectionProfile?.clipboardSupport ? [{ id: 'clipboard', label: clipboardState === 'initializing' ? t('clipboard.initializing') : clipboardEnabled ? `${t('actions.disable_clipboard')} · ${t('clipboard.' + clipboardState)}` : t('actions.enable_clipboard'), icon: 'assets/clipboard.svg', pressed: clipboardEnabled, disabled: !connected || clipboardState === 'initializing' || clipboardPending || handoff || !ready }] : []),
     ...(connected && clipboardEnabled && (downloadState?.offer || downloadState?.transfer?.state === 'running') ? [{ id: 'download', label: downloadLabel(), icon: 'assets/download.svg', disabled: downloadPending || downloadState.transfer?.state === 'running' || handoff || !ready }] : []),
     { id: 'reset-input', label: t('actions.reset_input'), icon: 'assets/input-reset.svg', disabled: !connected || inputResetPending || handoff || !ready },
-    { id: 'input-text', label: t('actions.input_text'), icon: 'assets/keyboard.svg', disabled: !connected || uiLocked || handoff || !ready },
+    { id: 'input-text', label: t('actions.input_text'), icon: 'assets/input-text.svg', disabled: !connected || uiLocked || handoff || !ready },
     ...(location === 'window' && (adaptiveEnabled() || !windowFitReady) && !dynamicResolutionAvailable() ? [{ id: 'fit-window', label: t('actions.fit_window'), icon: 'assets/scan.svg',
       disabled: !connected || !desktop?.size || handoff || !ready }] : []),
     ...(connected && dynamicResolutionAvailable() && (!windowActions || location === 'window') ? [{ id: 'resolution-menu', icon: 'assets/resolution.svg',
@@ -1139,6 +1140,7 @@ let launchTimer: ReturnType<typeof setInterval> | undefined;
 let checkingLaunch = false;
 let closing = false;
 let releaseViewListener: (() => void) | undefined;
+let releasePointerLeaveListener: (() => void) | undefined;
 async function checkLaunch() {
   if (handoff || checkingLaunch || closing || !ready || instanceId === 'main') return;
   checkingLaunch = true;
@@ -1180,7 +1182,7 @@ function disposePage() {
   adaptiveResolution.dispose();
   clearTimeout(windowStateTimer);
   closeContextMenu();
-  closing = true; releaseViewListener?.(); releaseToolbarListener?.(); clearInterval(infoTimer); clearInterval(launchTimer); clearInterval(sessionTimer); clearInterval(downloadTimer);
+  closing = true; releaseViewListener?.(); releasePointerLeaveListener?.(); releaseToolbarListener?.(); clearInterval(infoTimer); clearInterval(launchTimer); clearInterval(sessionTimer); clearInterval(downloadTimer);
   desktop?.dispose(); desktop = undefined;
 }
 window.addEventListener('pagehide', disposePage);
@@ -1344,6 +1346,7 @@ try {
     await disconnect(true);
   });
   let viewChanged = false;
+  releasePointerLeaveListener = window.anas.onPointerLeave?.(() => desktop?.pointerLeave());
   releaseViewListener = window.anas.onViewChanged(view => {
     viewChanged = true;
     instanceId = view.instanceId;

@@ -2,9 +2,11 @@
 
 ## 简体中文
 
+macOS 鼠标移出再进入后的双光标修复，需要 Anas 5.2.12 或更新版本；仅更新插件无法完整修复。
+
 截图默认仅返回图片；传入 `save: true` 可同时保存到宿主数据目录下的 `tmp/anas-plugin-rdp/screenshots/`，成功返回绝对路径 `saved_path`，失败返回 `save_error` 并保留图片。临时文件不进入备份，可随宿主清理删除；此功能需要提供 `tempDirectory` 的宿主。
 
-需要 **Anas 5.2.11 或更新版本**（插件 API 2），提供本插件使用的标题栏菜单、窗口状态、准备阶段适配、目录选择与文件定位接口。请先升级宿主，再安装插件。
+需要 **Anas 5.2.12 或更新版本**（插件 API 2），提供本插件使用的标题栏菜单、窗口状态、准备阶段适配、目录选择与文件定位接口。请先升级宿主，再安装插件。
 
 桌面显示远程光标，模型操作时也可观察位置变化。模型移动仅在本地平滑显示，不增加远端鼠标事件，不延迟工具或改变截图；服务器编辑页可勾选「禁用鼠标动画」，默认不勾选。手动移动即时跟随，移出后保留最后位置，不发送归位或隐藏操作；锁定本地输入仍显示远程更新。光标随桌面缩放并跟随远端形状，位置未知或远端要求隐藏时不显示。
 
@@ -36,7 +38,7 @@
 
 Windows 独立窗口隐藏系统最大化按钮，保留最小化和关闭；macOS 保留原生绿色按钮，自适应开启时可进入系统全屏。两平台工具栏始终保留尺寸操作：自适应开启时为全屏／退出全屏，关闭时换成「适配窗口大小」图标，点击恢复到当前允许的最大尺寸，仍可手动缩小。
 
-独立窗口关闭自适应时，可以手动缩小，最大尺寸限制为实际远端桌面对应的内容大小；无尺寸记录时适配实际画面，已有记录超过上限时收紧，远端分辨率变化时更新上限。此时最大化和全屏不可用。开启自适应后解除上限，恢复本次连接记住的普通窗口大小，没有记录时使用配置尺寸。此功能需要配套支持 `resizeWindow.maximumSize` 的 Anas 5.2.11 或更新版本宿主。窗口尺寸、显示器和位置由插件后台会话保留，侧栏往返和关闭后恢复可复用；全屏、最大化、侧栏尺寸及侧栏修改的远端分辨率不覆盖记录，断开后清除。首次和恢复尺寸允许超过显示器；原显示器仍连接时恢复原位置，否则放回当前屏幕，拖出标签优先使用鼠标落点。独立窗口画面最多按一个远程像素对应一个界面逻辑像素显示，空间不足时等比缩小；窄侧栏中的远端应用可能无法完整布局。自定义宽高须为 200～8192 的整数，宽度须为偶数，总像素不能超过 16,777,216。
+独立窗口关闭自适应时，可以手动缩小，最大尺寸限制为实际远端桌面对应的内容大小；无尺寸记录时适配实际画面，已有记录超过上限时收紧，远端分辨率变化时更新上限。此时最大化和全屏不可用。开启自适应后解除上限，恢复本次连接记住的普通窗口大小，没有记录时使用配置尺寸。此功能需要配套支持 `resizeWindow.maximumSize` 的 Anas 5.2.12 或更新版本宿主。窗口尺寸、显示器和位置由插件后台会话保留，侧栏往返和关闭后恢复可复用；全屏、最大化、侧栏尺寸及侧栏修改的远端分辨率不覆盖记录，断开后清除。首次和恢复尺寸允许超过显示器；原显示器仍连接时恢复原位置，否则放回当前屏幕，拖出标签优先使用鼠标落点。独立窗口画面最多按一个远程像素对应一个界面逻辑像素显示，空间不足时等比缩小；窄侧栏中的远端应用可能无法完整布局。自定义宽高须为 200～8192 的整数，宽度须为偶数，总像素不能超过 16,777,216。
 
 画面在可用空间内居中；独立窗口只缩小、不放大，侧边栏等比缩放。当前提供基本键鼠、证书信任和连接回收。声音、多显示器尚未提供。桌面直接键盘映射尚不支持本机输入法组合输入，可使用「输入文本」弹窗；远端输入法及复杂快捷键的效果依赖目标应用。
 
@@ -54,9 +56,11 @@ Windows 支持文件和文件夹双向复制粘贴，复制时仅交换目录信
 
 ## English
 
+The macOS double-cursor fix after leaving and re-entering a window requires Anas 5.2.12 or later; updating the plugin alone is insufficient.
+
 Screenshots return images by default. With `save: true`, the same PNG is also saved under the host data directory at `tmp/anas-plugin-rdp/screenshots/`; metadata includes an absolute `saved_path` on success or `save_error` while retaining the image on failure. These temporary files are excluded from backups and may be removed by host cleanup. Saving requires a host that provides `tempDirectory`.
 
-Requires **Anas 5.2.11 or later** (plugin API 2), which provides the titlebar menus, window state, fitting-before-activation, directory selection and file reveal APIs used by this plugin. Upgrade the host before installing the plugin.
+Requires **Anas 5.2.12 or later** (plugin API 2), which provides the titlebar menus, window state, fitting-before-activation, directory selection and file reveal APIs used by this plugin. Upgrade the host before installing the plugin.
 
 The desktop displays the remote cursor, including movement from model tools. Model moves animate locally without adding remote input, delaying tools or changing screenshots. The server editor offers “Disable mouse animation”, unchecked by default. Local movement appears immediately; leaving the desktop retains the last position without sending a reset or hide operation. Locking local input still allows remote cursor updates. The cursor follows desktop scaling and server-provided shapes; unknown positions and server-hidden cursors are not drawn.
 
@@ -88,7 +92,7 @@ The sidebar toolbar and separate-window titlebar provide “Input text”. Compo
 
 Separate windows hide the system maximize button on Windows while keeping minimize and close. macOS retains the native green button for system fullscreen when adaptation is enabled. Both platforms always offer a toolbar size action: fullscreen/exit fullscreen with adaptation enabled, or a distinct “Fit window to content” icon with adaptation disabled. Fitting restores the current allowed maximum size; manual shrinking remains available.
 
-With window adaptation disabled, separate windows can shrink, but cannot grow beyond the actual remote desktop size. Without a remembered size, they fit the actual frame; smaller remembered sizes are retained and oversized sizes are clamped. The limit updates when the remote resolution changes. Maximizing and fullscreen are unavailable. Enabling adaptation removes the limit and retains the normal window size remembered by the live plugin session, using the configured size if none is recorded. This behavior requires Anas 5.2.11 or later with `resizeWindow.maximumSize` support. Window size, display and position survive sidebar moves and closing/reopening a window; fullscreen, maximized and sidebar sizes or sidebar resolution changes never overwrite them. Disconnecting clears this memory. Initial and restored sizes may exceed the display. Windows return to the recorded display when available, otherwise the current screen; dragging out a tab takes precedence over the remembered position. Separate windows display at most one remote pixel per CSS pixel and scale down when needed. Remote applications may not fit very narrow sidebars. Custom dimensions must be integers from 200 to 8192, with even width and at most 16,777,216 pixels.
+With window adaptation disabled, separate windows can shrink, but cannot grow beyond the actual remote desktop size. Without a remembered size, they fit the actual frame; smaller remembered sizes are retained and oversized sizes are clamped. The limit updates when the remote resolution changes. Maximizing and fullscreen are unavailable. Enabling adaptation removes the limit and retains the normal window size remembered by the live plugin session, using the configured size if none is recorded. This behavior requires Anas 5.2.12 or later with `resizeWindow.maximumSize` support. Window size, display and position survive sidebar moves and closing/reopening a window; fullscreen, maximized and sidebar sizes or sidebar resolution changes never overwrite them. Disconnecting clears this memory. Initial and restored sizes may exceed the display. Windows return to the recorded display when available, otherwise the current screen; dragging out a tab takes precedence over the remembered position. Separate windows display at most one remote pixel per CSS pixel and scale down when needed. Remote applications may not fit very narrow sidebars. Custom dimensions must be integers from 200 to 8192, with even width and at most 16,777,216 pixels.
 
 The desktop is centered in the available space: separate windows scale down only, while the sidebar scales proportionally. Basic keyboard/mouse input, certificate trust, and cleanup are provided. Audio and multiple displays are not provided. Direct desktop key mapping does not support local IME composition; use the “Input text” dialog; remote IME and complex-shortcut behavior depends on the target application.
 

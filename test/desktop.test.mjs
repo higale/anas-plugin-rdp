@@ -133,6 +133,55 @@ test('local motion predicts immediately, ignores stale echoes after leaving, and
   assert.equal(ui.icon.style.left, '69px', 'A rejected local event must not block remote updates after locking');
 });
 
+test('re-entering the desktop restores the remote cursor before another move, respecting letterboxing and input locks', t => {
+  const ui = cursorFixture(t);
+  ui.snapshot();
+  const enter = (x, y) => ui.desktop.canvas.dispatchEvent(new ui.window.MouseEvent('pointerenter', { clientX: x, clientY: y }));
+  const leave = () => ui.desktop.canvas.dispatchEvent(new ui.window.MouseEvent('pointerleave'));
+  ui.move(90, 60);
+  for (let round = 0; round < 3; round++) {
+    leave();
+    assert.equal(ui.desktop.canvas.style.cursor, 'default');
+    enter(100, 70);
+    assert.equal(ui.desktop.canvas.style.cursor, 'none', 'Entry must not wait for a subsequent pointermove');
+    assert.equal(ui.icon.style.left, '39px');
+    assert.equal(ui.icon.style.top, '49px');
+    assert.equal(ui.sent.at(-1).type, 'mouse');
+    assert.equal(ui.sent.at(-1).flags, 0x0800, 'Entry only updates position, never presses a button');
+  }
+  leave();
+  const messages = ui.sent.length;
+  enter(20, 70);
+  assert.equal(ui.desktop.canvas.style.cursor, 'default');
+  assert.equal(ui.sent.length, messages, 'Letterbox entry must not send remote input');
+  ui.snapshot({ uiLocked: true, uiRevision: 1 });
+  const lockedMessages = ui.sent.length;
+  enter(100, 70);
+  assert.equal(ui.desktop.canvas.style.cursor, 'not-allowed');
+  assert.equal(ui.sent.length, lockedMessages);
+  ui.snapshot({ uiLocked: false, uiRevision: 2, owner: 'another-page' });
+  const observerMessages = ui.sent.length;
+  enter(100, 70);
+  assert.equal(ui.desktop.canvas.style.cursor, 'default');
+  assert.equal(ui.sent.length, observerMessages, 'Entry must not take over another page');
+});
+
+test('native window exits reset cursor state even when the iframe receives no DOM leave or enter', t => {
+  const ui = cursorFixture(t);
+  ui.snapshot();
+  for (let round = 0; round < 3; round++) {
+    ui.move(90, 60);
+    assert.equal(ui.desktop.canvas.style.cursor, 'none');
+    const messages = ui.sent.length, position = ui.icon.style.left;
+    ui.desktop.pointerLeave();
+    assert.equal(ui.desktop.canvas.style.cursor, 'default');
+    assert.equal(ui.sent.length, messages, 'Leaving must not send input or release remote buttons');
+    assert.equal(ui.icon.style.left, position, 'Keep the last remote cursor position');
+    ui.move(100, 70);
+    assert.equal(ui.desktop.canvas.style.cursor, 'none');
+  }
+});
+
 test('tool movement animates only the overlay, coalesces new targets and never delays acknowledgements or sends input', t => {
   const ui = cursorFixture(t);
   ui.snapshot({ cursorAnimate: true });

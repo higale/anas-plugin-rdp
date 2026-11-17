@@ -125,8 +125,11 @@ export class Desktop {
       event.preventDefault(); this.canvas.focus(); this.canvas.setPointerCapture(event.pointerId);
       mouse(event, (buttons[event.button] ?? 0) | 0x8000);
     }, options);
+    // Re-entry can arrive before any new movement (including across the window/iframe boundary).
+    // Restore cursor ownership and align the remote cursor at the entry position immediately.
+    this.canvas.addEventListener('pointerenter', event => mouse(event, 0x0800), options);
     this.canvas.addEventListener('pointermove', event => mouse(event, 0x0800), options);
-    this.canvas.addEventListener('pointerleave', () => { this.pointerInside = false; this.updateLocalCursor(); }, options);
+    this.canvas.addEventListener('pointerleave', () => this.pointerLeave(), options);
     this.canvas.addEventListener('pointerup', event => {
       mouse(event, buttons[event.button] ?? 0);
       if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
@@ -269,6 +272,7 @@ export class Desktop {
     this.socket.close();
   }
   get available() { return this.settled && !this.abort.signal.aborted; }
+  pointerLeave() { this.pointerInside = false; this.updateLocalCursor(); }
   setInputBlocked(blocked: boolean) { if (blocked && !this.inputBlocked) this.release(); this.inputBlocked = blocked; }
   release() { this.input({ type: 'release' }); }
   dispose() {

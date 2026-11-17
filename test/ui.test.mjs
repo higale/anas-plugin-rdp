@@ -19,6 +19,7 @@ const compiled = await build({
       updateInputLock(locked, revision) { if (revision >= this.lockRevision) { this.lockRevision = revision; this.locked = locked; } this.onState('connected', this.locked); }
       get resizeEpoch() { return this.available ? 1 : undefined; }
       release() {}
+      pointerLeave() { window.__pointerLeaves = (window.__pointerLeaves ?? 0) + 1; }
       setInputBlocked(value) { window.__inputBlocked = value; }
       dispose() { this.available = false; this.canvas.remove(); }
     }` }));
@@ -90,6 +91,7 @@ async function fixture(t, options = {}) {
     registerLifecycle: handlers => { lifecycle = handlers; },
     ready: async () => { await lifecycle.activate({ signal: new window.AbortController().signal, context }); context.phase = 'active'; viewListener?.(info.view); },
     failed: async () => { calls.push({ method: 'failed' }); },
+    onPointerLeave: listener => { window.__pointerLeave = listener; return () => { window.__pointerLeave = undefined; }; },
     onViewChanged: listener => { viewListener = listener; return () => { viewListener = undefined; }; },
     setToolbar: async value => { await options.toolbar?.(value); toolbar = value; },
     resizeWindow: async params => { calls.push({ method: 'resizeWindow', params, phase: context.phase }); await (context.phase === 'preparing' ? options.prepareResize : options.resize)?.(params, context); },
@@ -2365,4 +2367,16 @@ test('moving a page while the directory picker is open cannot start a late downl
   await ui.lifecycle().prepare({signal:new ui.window.AbortController().signal,context:ui.context});
   selection.resolve('/chosen'); await new Promise(resolve=>setTimeout(resolve,30));
   assert.equal(ui.calls.some(call=>call.method==='downloadStart'),false);
+});
+
+for (const location of ['sidebar', 'window']) test(`native pointer exits reach the current ${location} desktop and unsubscribe on disposal`, async t => {
+  const ui = await fixture(t, { location, profile: { hasPassword: true } });
+  ui.submit();
+  await until(() => ui.element('status').textContent === 'Connected');
+  const calls = ui.calls.length;
+  ui.window.__pointerLeave(); ui.window.__pointerLeave();
+  assert.equal(ui.window.__pointerLeaves, 2);
+  assert.equal(ui.calls.length, calls, 'Cursor cleanup must not send a backend operation');
+  await ui.lifecycle().dispose({ signal: new ui.window.AbortController().signal, context: ui.context, reason: 'closed' });
+  assert.equal(ui.window.__pointerLeave, undefined);
 });
