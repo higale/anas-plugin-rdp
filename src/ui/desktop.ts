@@ -1,3 +1,4 @@
+import { LocalIme } from './local-ime';
 import keyCodes from '../key-codes.json';
 export interface DisplayConnection { url: string; token: string; pageId: string }
 interface Cursor { kind: string; width?: number; height?: number; x?: number; y?: number; pixels?: number[] }
@@ -28,6 +29,7 @@ export class Desktop {
   private clipboard?: { enabled: boolean; state?: string };
   private controlling = false;
   private inputBlocked = false;
+  private localIme: LocalIme;
   private settled = false;
   private resolveReady!: () => void;
   private rejectReady!: (error: Error) => void;
@@ -48,6 +50,12 @@ export class Desktop {
     this.cursorImage.draggable = false;
     this.cursorLayer.append(this.cursorImage);
     container.append(this.canvas, this.cursorLayer);
+    this.localIme = new LocalIme(container, message => {
+      if (message.type === 'text' && (typeof message.text !== 'string' || Array.from(message.text).length > 128 || /[\uD800-\uDFFF]/u.test(message.text))) {
+        this.fail(new Error('RDP_INVALID_INPUT')); return false;
+      }
+      return this.input(message);
+    });
     this.resize = new ResizeObserver(() => this.renderCursor());
     this.resize.observe(this.canvas);
     this.resize.observe(container);
@@ -67,6 +75,7 @@ export class Desktop {
           this.metadata = metadata;
           if (capabilityChanged) this.onResizeCapability(metadata.resizeSupported === true);
           if (metadata.resizeError) this.onResizeError(metadata.resizeError);
+          if (this.epoch !== metadata.epoch) this.localIme.reset();
           this.epoch = metadata.epoch;
           this.updateInputLock(metadata.uiLocked, metadata.uiRevision);
           this.updateCursor(metadata);
@@ -122,7 +131,9 @@ export class Desktop {
         }
         return;
       }
-      event.preventDefault(); this.canvas.focus(); this.canvas.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      if (this.localIme.enabled) { this.localIme.focus(event); this.localIme.syncModifiers(event); } else this.canvas.focus();
+      this.canvas.setPointerCapture(event.pointerId);
       mouse(event, (buttons[event.button] ?? 0) | 0x8000);
     }, options);
     // Re-entry can arrive before any new movement (including across the window/iframe boundary).
@@ -138,7 +149,7 @@ export class Desktop {
     this.canvas.addEventListener('contextmenu', event => event.preventDefault(), options);
     this.canvas.addEventListener('wheel', event => { if (!this.controlling) return; event.preventDefault(); mouse(event, 0x0200, Math.sign(-event.deltaY) * 120); }, { ...options, passive: false });
     const key = (event: KeyboardEvent, down: boolean) => {
-      if (!this.controlling || this.inputBlocked || event.isComposing) return;
+      if (!this.controlling || this.inputBlocked || this.localIme.enabled || event.isComposing) return;
       const code = codes[event.code];
       if (code === undefined) return;
       event.preventDefault();
@@ -146,7 +157,8 @@ export class Desktop {
     };
     this.canvas.addEventListener('keydown', event => key(event, true), options);
     this.canvas.addEventListener('keyup', event => key(event, false), options);
-    this.canvas.addEventListener('blur', () => this.release(), options);
+    this.canvas.addEventListener('blur', event => { if (event.relatedTarget !== this.localIme.element) this.release(); }, options);
+    this.localIme.element.addEventListener('blur', () => this.release(), options);
     window.addEventListener('blur', () => this.release(), options);
     window.addEventListener('scroll', () => this.renderCursor(), { ...options, capture: true });
   }
@@ -167,7 +179,7 @@ export class Desktop {
     const metadata = this.metadata;
     if (!metadata) return;
     this.controlling = metadata.owner === this.connection.pageId && !this.uiLocked;
-    if (!this.controlling) this.pendingMouseSequence = 0;
+    if (!this.controlling) { this.pendingMouseSequence = 0; this.localIme.reset(); }
     // Display revisions include pixel/cursor updates, not just control changes.
     if (this.reportedState !== metadata.state || previousLocked !== this.uiLocked || previousControlling !== this.controlling) {
       this.reportedState = metadata.state;
@@ -259,6 +271,8 @@ export class Desktop {
     this.updateLocalCursor();
   }
   private fail(error: Error) {
+    this.controlling = false;
+    this.localIme.reset();
     if (this.abort.signal.aborted) return;
     if (!this.settled) { this.settled = true; clearTimeout(this.timer); this.rejectReady(error); }
     this.abort.abort();
@@ -274,14 +288,18 @@ export class Desktop {
   get available() { return this.settled && !this.abort.signal.aborted; }
   pointerLeave() { this.pointerInside = false; this.updateLocalCursor(); }
   setInputBlocked(blocked: boolean) { if (blocked && !this.inputBlocked) this.release(); this.inputBlocked = blocked; }
-  release() { this.input({ type: 'release' }); }
+  setLocalIme(enabled: boolean, label: string) {
+    if (this.localIme.enabled !== enabled) this.release();
+    this.localIme.setEnabled(enabled, label);
+  }
+  release() { this.localIme.reset(); this.input({ type: 'release' }); }
   dispose() {
     this.release(); this.abort.abort(); clearTimeout(this.timer);
     this.stopCursorAnimation();
     this.resize.disconnect();
     if (!this.settled) { this.settled = true; this.rejectReady(new Error('RDP_DISPLAY_CANCELED')); }
     this.socket.onmessage = this.socket.onerror = this.socket.onclose = null;
-    this.socket.close(); this.canvas.remove(); this.cursorLayer.remove();
+    this.socket.close(); this.localIme.dispose(); this.canvas.remove(); this.cursorLayer.remove();
   }
 }
 const buttons: Record<number, number> = { 0: 0x1000, 1: 0x4000, 2: 0x2000 };

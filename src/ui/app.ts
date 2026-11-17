@@ -51,7 +51,7 @@ let pageContext: PageContext;
 let handoff = true;
 let lease: Lease | null = null;
 type AdaptivePreferences = Pick<Profile, 'adaptiveWindow' | 'adaptiveSidebar'>;
-type SessionStatus = AdaptivePreferences & { state: string; certificate: { sha256: string; trusted: boolean } | null };
+type SessionStatus = AdaptivePreferences & { localIme: boolean; state: string; certificate: { sha256: string; trusted: boolean } | null };
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => element<HTMLInputElement>(id);
 let owner = '';
@@ -67,6 +67,7 @@ let uiLocked = false;
 let uiLockPending = false;
 let inputResetPending = false;
 let textInputBusy = false;
+let localImePending = false;
 let clipboardEnabled = false;
 let clipboardState = 'initializing';
 let clipboardPending = false;
@@ -214,7 +215,7 @@ const textInput = new TextInput(() => {
     const result = await window.anas.backend.call('inputText', { owner, id: resource.id, pageId: pageContext.pageId, expectedEpoch: display.resizeEpoch, text }) as { accepted: boolean };
     if (!result?.accepted) throw new Error('RDP_INPUT_UNCONFIRMED');
   };
-}, busy => { textInputBusy = busy; desktop?.setInputBlocked(busy); presentation(); });
+}, busy => { textInputBusy = busy; desktop?.setInputBlocked(busy || localImePending || handoff || closing); presentation(); });
 function openTextInput() {
   if (!connectionActions().find(action => action.id === 'input-text')?.disabled) textInput.open();
 }
@@ -442,6 +443,7 @@ function connectionActions(windowActions = false): Toolbar['actions'] {
     ...(connected && clipboardEnabled && (downloadState?.offer || downloadState?.transfer?.state === 'running') ? [{ id: 'download', label: downloadLabel(), icon: 'assets/download.svg', disabled: downloadPending || downloadState.transfer?.state === 'running' || handoff || !ready }] : []),
     { id: 'reset-input', label: t('actions.reset_input'), icon: 'assets/input-reset.svg', disabled: !connected || inputResetPending || handoff || !ready },
     { id: 'input-text', label: t('actions.input_text'), icon: 'assets/input-text.svg', disabled: !connected || uiLocked || handoff || !ready },
+    { id: 'local-ime', label: t('actions.use_local_ime'), icon: 'assets/local-ime.svg', pressed: connectionProfile?.localIme ?? false, disabled: !connected || uiLocked || handoff || !ready || localImePending },
     ...(location === 'window' && (adaptiveEnabled() || !windowFitReady) && !dynamicResolutionAvailable() ? [{ id: 'fit-window', label: t('actions.fit_window'), icon: 'assets/scan.svg',
       disabled: !connected || !desktop?.size || handoff || !ready }] : []),
     ...(connected && dynamicResolutionAvailable() && (!windowActions || location === 'window') ? [{ id: 'resolution-menu', icon: 'assets/resolution.svg',
@@ -453,6 +455,22 @@ function connectionActions(windowActions = false): Toolbar['actions'] {
     ...(!windowActions && location === 'sidebar' ? [{ id: 'move-window', label: t('actions.move_window'), icon: 'assets/move-window.svg',
       disabled: instanceId === 'main' || !ready || handoff || closing || disconnecting || movingWindow }] : []),
   ].map(action => ({ ...action, disabled: action.disabled || textInputBusy }));
+}
+async function toggleLocalIme() {
+  const resource = session, display = desktop;
+  if (!connectionActions().some(action => action.id === 'local-ime' && !action.disabled) || !resource || !display || display.resizeEpoch === undefined) return;
+  localImePending = true; connectionOperations++; presentation();
+  display.setInputBlocked(true);
+  try {
+    const result = await window.anas.backend.call('setLocalIme', { owner, id: resource.id, pageId: pageContext.pageId,
+      expectedEpoch: display.resizeEpoch, enabled: !connectionProfile?.localIme }) as { localIme: boolean };
+    if (session === resource && connectionProfile) {
+      connectionProfile.localIme = result.localIme;
+      display.setLocalIme(result.localIme, t('actions.local_ime'));
+      if (errorKey === 'errors.local_ime_save') { errorKey = undefined; renderError(); }
+    }
+  } catch { if (session === resource && !closing) failure('errors.local_ime_save'); }
+  finally { display.setInputBlocked(textInputBusy || handoff || closing); localImePending = false; connectionOperations--; if (!closing) presentation(); }
 }
 function statusTone() { return connected ? 'success' : connecting || disconnecting ? 'warning' : 'neutral'; }
 function presentation() {
@@ -774,7 +792,7 @@ async function saveProfile() {
     name: input('name').value.trim() || input('host').value.trim(), openMode: input('open-mode').value,
     clipboardSupport: input('clipboard-support').checked,
     adaptiveWindow: input('adaptive-window').checked, adaptiveSidebar: input('adaptive-sidebar').checked,
-    disableMouseAnimation: input('disable-mouse-animation').checked,
+    disableMouseAnimation: input('disable-mouse-animation').checked, localIme: selected?.localIme ?? false,
     passwordAction: !input('remember-password').checked ? 'remove' : selected?.hasPassword && !passwordEdited ? 'keep' : 'set',
     ...(input('remember-password').checked && (passwordEdited || !selected?.hasPassword) ? { password: input('password').value } : {}),
   }) as Profile;
@@ -866,6 +884,8 @@ async function attach(connection: SessionRef, signal?: AbortSignal) {
     controls();
   }, presentation, (enabled, state) => { clipboardEnabled = enabled; if (state) clipboardState = state; controls(); }, connectionProfile?.disableMouseAnimation ?? false, reportResizeError, supported => { if (session === connection && !closing) { resizeSupported = supported; presentation(); } });
   desktop = mine;
+  mine.setInputBlocked(textInputBusy || localImePending || handoff || closing);
+  mine.setLocalIme(connectionProfile?.localIme ?? false, t('actions.local_ime'));
   mine.canvas.setAttribute('aria-label', t('plugin.name'));
   const cancel = () => { if (desktop === mine) desktop = undefined; mine.dispose(); };
   signal?.addEventListener('abort', cancel, { once: true });
@@ -892,6 +912,8 @@ async function refreshSession(signal?: AbortSignal, keepLastFrame = false): Prom
     const info = await window.anas.backend.call('status', { owner, id: current.id }) as SessionStatus;
     if (session === current && generation === mine && connectionProfile) {
       connectionProfile.adaptiveWindow = info.adaptiveWindow; connectionProfile.adaptiveSidebar = info.adaptiveSidebar;
+      connectionProfile.localIme = info.localIme ?? false;
+      desktop?.setLocalIme(connectionProfile.localIme, t('actions.local_ime'));
     }
     ended = ['closed', 'connection_failed', 'certificate_required'].includes(info.state);
   } catch (error) {
@@ -969,7 +991,7 @@ async function connect() {
       if (generation !== mine) return;
       prepared = true;
       const trustedSha256 = trusts.find(item => item.host === profile.host && item.port === profile.port)?.sha256;
-      const created = await window.anas.backend.call('create', { owner, name: profile.name, openMode: profile.openMode, clipboardSupport: profile.clipboardSupport, adaptiveWindow: profile.adaptiveWindow, adaptiveSidebar: profile.adaptiveSidebar, disableMouseAnimation: profile.disableMouseAnimation, desktopWidth: profile.desktopWidth, desktopHeight: profile.desktopHeight, host: profile.host, port: profile.port, username: profile.username, domain: profile.domain, password, trustedSha256 }, { concurrent: true }) as SessionRef & { reused?: boolean };
+      const created = await window.anas.backend.call('create', { owner, name: profile.name, openMode: profile.openMode, clipboardSupport: profile.clipboardSupport, adaptiveWindow: profile.adaptiveWindow, adaptiveSidebar: profile.adaptiveSidebar, disableMouseAnimation: profile.disableMouseAnimation, localIme: profile.localIme, desktopWidth: profile.desktopWidth, desktopHeight: profile.desktopHeight, host: profile.host, port: profile.port, username: profile.username, domain: profile.domain, password, trustedSha256 }, { concurrent: true }) as SessionRef & { reused?: boolean };
       if (generation !== mine) return;
       reattaching = created.reused === true;
       session = created;
@@ -1102,6 +1124,7 @@ element('ui-lock').addEventListener('click', () => void toggleUiLock());
 element('reset-input').addEventListener('click', () => void resetInput());
 element('fit-window').addEventListener('click', () => void fitDesktopWindow(true));
 element('input-text').addEventListener('click', openTextInput);
+element('local-ime').addEventListener('click', () => void toggleLocalIme());
 element('resolution-menu').addEventListener('click', () => {
   const action = connectionActions().find(action => action.id === 'resolution-menu');
   if (!action || action.disabled) return;
@@ -1199,6 +1222,7 @@ window.anas.registerLifecycle({
     const savingWindowState = flushWindowState();
     closeContextMenu();
     handoff = true;
+    desktop?.setInputBlocked(true);
     await textInput.pause();
     adaptiveResolution.suspend();
     desktop?.release();
@@ -1236,16 +1260,17 @@ window.anas.registerLifecycle({
       } else await fitDesktopWindow(false, true);
     }
     signal.throwIfAborted();
-    handoff = false; controls();
+    handoff = false; desktop?.setInputBlocked(textInputBusy || localImePending); controls();
   },
   async resume({ signal }) {
     await restoreInput(signal);
     signal.throwIfAborted();
-    handoff = false; controls();
+    handoff = false; desktop?.setInputBlocked(textInputBusy || localImePending); controls();
   },
   async dispose({ signal, reason }) {
     const savingWindowState = reason === 'closed' ? flushWindowState() : windowStateWrites;
     handoff = true;
+    desktop?.setInputBlocked(true);
     await textInput.pause();
     await savingWindowState;
     adaptiveResolution.suspend();
@@ -1341,6 +1366,7 @@ try {
     if (id === 'clipboard') { await toggleClipboard(); return; }
     if (id === 'ui-lock') { await toggleUiLock(); return; }
     if (id === 'reset-input') { await resetInput(); return; }
+    if (id === 'local-ime') { await toggleLocalIme(); return; }
     if (id === 'input-text') { openTextInput(); return; }
     if (id !== 'disconnect' || instanceId === 'main' || !ready || handoff || closing || disconnecting) return;
     await disconnect(true);

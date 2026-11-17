@@ -54,7 +54,8 @@
     "resize_unsupported": "The server does not support dynamic resolution. The current desktop size is retained.",
     "resize_failed": "Resolution adjustment failed. Adaptation is paused; the current image is retained.",
     "resize_retry": "The selected resolution could not be applied. Wait for input operations to finish, then select it again.",
-    "adaptive_save": "Could not save adaptive resolution. Please retry."
+    "adaptive_save": "Could not save adaptive resolution. Please retry.",
+    "local_ime_save": "Could not save the input method. Please retry."
   },
   "actions": {
     "cancel": "Cancel",
@@ -90,7 +91,9 @@
     "move_window": "Move to separate window",
     "adaptive_resolution": "Adaptive resolution",
     "input_text": "Input text",
-    "close": "Close"
+    "close": "Close",
+    "local_ime": "Local input method",
+    "use_local_ime": "Use local input method"
   },
   "profiles": {
     "password_saved": "Saved; leave blank to keep",

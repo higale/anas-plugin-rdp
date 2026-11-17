@@ -788,6 +788,10 @@ async fn display(
                                 if first { timeout(IO_TIMEOUT, ws.send(Message::Text(json!({"type":"ready"}).to_string().into()))).await??; }
                             }
                         }
+                    } else if message["type"] == "text" {
+                        // Await on this display stream so later keys/clicks cannot pass text.
+                        // The RDP engine and other pages continue independently.
+                        input_text(&message, &page, &controls, &input, &state).await?;
                     } else {
                         let mut owner = controls.lock().expect("controls");
                         // Both transitions invalidate old UI events, including events queued while locked.
@@ -827,6 +831,44 @@ async fn display(
     }
 
     Ok(())
+}
+
+async fn input_text(
+    value: &Value,
+    page: &str,
+    controls: &Arc<Mutex<Controls>>,
+    input: &RdpInputSender,
+    state: &Arc<watch::Sender<Snapshot>>,
+) -> anyhow::Result<()> {
+    let text = value["text"].as_str().context("invalid text")?;
+    if text.is_empty() || text.chars().count() > 128 {
+        bail!("invalid text length");
+    }
+    let batch = super::input::batch(&json!([{"type":"text", "text":text}]), 0, 0)?;
+    let now = Instant::now();
+    let mut timed = super::input::TimedInput::new(batch, Duration::ZERO, now, now + IO_TIMEOUT);
+    loop {
+        tokio::time::sleep_until(timed.next_at).await;
+        let done = {
+            let owner = controls.lock().expect("controls");
+            // Recheck each burst, never hold a mutex while waiting. Locking or
+            // transferring the page cancels unsent text without replay on a new lease.
+            if !owner.accepts_ui(value["uiRevision"].as_u64())
+                || owner.owner.as_deref() != Some(page)
+                || value["epoch"].as_u64() != Some(owner.epoch)
+            {
+                return Ok(());
+            }
+            timed.advance(input, Instant::now())?
+        };
+        state.send_modify(|snapshot| {
+            snapshot.input_revision += 1;
+            snapshot.input_time = now_ms();
+        });
+        if done {
+            return Ok(());
+        }
+    }
 }
 
 fn resize_display(
@@ -973,6 +1015,121 @@ mod tests {
         ] {
             assert!(validate_resolution(width, height).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn display_text_preserves_unicode_and_finishes_before_the_next_key() {
+        let controls = Arc::new(Mutex::new(Controls {
+            owner: Some("page".into()),
+            ..Controls::default()
+        }));
+        let state = connected_state();
+        let (input, mut receiver) = RdpInputSender::channel(8);
+        let text = "你好😀abcdefgh";
+        input_text(
+            &json!({"text":text,"epoch":0,"uiRevision":0}),
+            "page",
+            &controls,
+            &input,
+            &state,
+        )
+        .await
+        .unwrap();
+        handle_input(
+            &json!({"type":"key","code":28,"down":true}),
+            &mut controls.lock().unwrap(),
+            &input,
+        )
+        .unwrap();
+        let mut events = Vec::new();
+        while let Ok(RdpInputEvent::FastPath(batch)) = receiver.try_recv() {
+            events.extend(batch);
+        }
+        assert_eq!(
+            events.pop(),
+            Some(FastPathInputEvent::KeyboardEvent(
+                KeyboardFlags::empty(),
+                28
+            ))
+        );
+        let expected =
+            super::super::input::batch(&json!([{"type":"text","text":text}]), 0, 0).unwrap();
+        assert_eq!(events, expected.events.as_slice());
+    }
+
+    #[tokio::test]
+    async fn display_text_stops_unsent_bursts_when_ownership_or_lock_changes() {
+        for lock in [false, true] {
+            let controls = Arc::new(Mutex::new(Controls {
+                owner: Some("page".into()),
+                ..Controls::default()
+            }));
+            let state = connected_state();
+            let (input, mut receiver) = RdpInputSender::channel(8);
+            let change = async {
+                let first = receiver.recv().await.unwrap();
+                let mut owner = controls.lock().unwrap();
+                if lock {
+                    owner.ui_locked = true;
+                    owner.ui_revision += 1;
+                } else {
+                    owner.set_owner(Some("other".into()));
+                }
+                first
+            };
+            let message = json!({"text":"abcdefghijklmnop","epoch":0,"uiRevision":0});
+            let (sent, _) = tokio::join!(
+                input_text(&message, "page", &controls, &input, &state),
+                change
+            );
+            sent.unwrap();
+            assert!(
+                receiver.try_recv().is_err(),
+                "old composition must not continue under a new lease"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn display_text_rejects_invalid_lengths_and_stale_leases_without_input() {
+        let controls = Arc::new(Mutex::new(Controls {
+            owner: Some("page".into()),
+            ..Controls::default()
+        }));
+        let state = connected_state();
+        let (input, mut receiver) = RdpInputSender::channel(1);
+        for text in [String::new(), "a".repeat(129)] {
+            assert!(
+                input_text(
+                    &json!({"text":text,"epoch":0,"uiRevision":0}),
+                    "page",
+                    &controls,
+                    &input,
+                    &state
+                )
+                .await
+                .is_err()
+            );
+        }
+        input_text(
+            &json!({"text":"旧","epoch":1,"uiRevision":0}),
+            "page",
+            &controls,
+            &input,
+            &state,
+        )
+        .await
+        .unwrap();
+        input_text(
+            &json!({"text":"旧","epoch":0,"uiRevision":1}),
+            "page",
+            &controls,
+            &input,
+            &state,
+        )
+        .await
+        .unwrap();
+        assert!(receiver.try_recv().is_err());
     }
 
     fn connected_state() -> Arc<watch::Sender<Snapshot>> {

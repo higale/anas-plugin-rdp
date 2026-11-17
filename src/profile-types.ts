@@ -2,7 +2,7 @@ import type { Resolution } from './resolution';
 
 export type Target = { host: string; port: number; username: string; domain: string };
 export type Trust = { host: string; port: number; sha256: string };
-export type Profile = Target & Resolution & { id: string; revision: number; name: string; openMode: 'sidebar' | 'window'; clipboardSupport: boolean; adaptiveWindow: boolean; adaptiveSidebar: boolean; disableMouseAnimation: boolean; hasPassword: boolean };
+export type Profile = Target & Resolution & { id: string; revision: number; name: string; openMode: 'sidebar' | 'window'; clipboardSupport: boolean; adaptiveWindow: boolean; adaptiveSidebar: boolean; disableMouseAnimation: boolean; localIme: boolean; hasPassword: boolean };
 
 /** Non-secret metadata for running resources, independent of their pages. */
 export type SessionSummary = { id: string; state: string; clipboardErrors?: number; profile: Omit<Profile, 'revision' | 'hasPassword'> };

@@ -54,7 +54,8 @@
     "resize_unsupported": "服务器不支持动态分辨率，已保留当前桌面尺寸。",
     "resize_failed": "分辨率调整失败，已暂停自适应，保留当前画面。",
     "resize_retry": "未能应用所选分辨率，请等待输入操作结束后重新选择。",
-    "adaptive_save": "自适应设置保存失败，请重试。"
+    "adaptive_save": "自适应设置保存失败，请重试。",
+    "local_ime_save": "无法保存输入法选择，请重试。"
   },
   "actions": {
     "cancel": "取消",
@@ -90,7 +91,9 @@
     "move_window": "移到独立窗口",
     "adaptive_resolution": "自适应",
     "input_text": "输入文本",
-    "close": "关闭"
+    "close": "关闭",
+    "local_ime": "本地输入法",
+    "use_local_ime": "使用本地输入法"
   },
   "profiles": {
     "password_saved": "已保存，留空保留",

@@ -8,6 +8,24 @@ import { build } from 'esbuild';
 const compiled = await build({ entryPoints: ['src/profiles.ts'], bundle: true, write: false, platform: 'node', format: 'esm' });
 const { Profiles } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
 const fields = { name: 'Example', host: 'example.invalid', username: 'tester', passwordAction: 'remove' };
+
+test('local IME defaults off in existing v0 profiles and partial changes preserve every other setting', async t => {
+  const { store, directory, read } = await fixture(t);
+  let profile = await store.call('profiles.save', { ...fields, adaptiveWindow:true, passwordAction:'set', password:'synthetic' });
+  const original = await read(); delete original.profiles[0].local_ime;
+  await writeFile(join(directory,'profiles.json'),JSON.stringify(original));
+  assert.equal((await store.call('profiles.get',profile)).localIme,false);
+  profile = await store.call('preferences.localIme',{id:profile.id,enabled:true});
+  assert.equal(profile.localIme,true); assert.equal(profile.hasPassword,true); assert.equal(profile.adaptiveWindow,true);
+  const next = await read(), { local_ime, revision, ...rest } = next.profiles[0];
+  assert.equal(local_ime,true); assert.equal(revision,original.profiles[0].revision+1);
+  const {revision:before,...beforeRest}=original.profiles[0]; assert.deepEqual(rest,beforeRest);
+  assert.equal(next.version,0);
+  const same = await store.call('preferences.localIme',{id:profile.id,enabled:true}); assert.equal(same.revision,profile.revision);
+  const copy = await store.call('profiles.save',{...profile,id:undefined,revision:undefined,passwordAction:'remove'}); assert.equal(copy.localIme,true);
+  assert.equal((await store.call('preferences.localIme',{id:profile.id,enabled:false})).localIme,false);
+  await assert.rejects(store.call('preferences.localIme',{id:profile.id,enabled:0}),/PROFILE_INVALID/);
+});
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'rdp-profiles-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

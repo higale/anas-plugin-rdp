@@ -20,6 +20,7 @@ const compiled = await build({
       get resizeEpoch() { return this.available ? 1 : undefined; }
       release() {}
       pointerLeave() { window.__pointerLeaves = (window.__pointerLeaves ?? 0) + 1; }
+      setLocalIme(value) { window.__localIme = value; }
       setInputBlocked(value) { window.__inputBlocked = value; }
       dispose() { this.available = false; this.canvas.remove(); }
     }` }));
@@ -144,8 +145,9 @@ async function fixture(t, options = {}) {
       if (method === 'inputText') { await options.inputText?.(params); return { accepted: true }; }
       if (method === 'setUiLocked') { await options.lock?.(params); const uiRevision = ++window.__lockRevision; if (!options.delayLockSnapshot) window.__remoteLock(params.locked, uiRevision); return { session_id: params.id, ui_locked: params.locked, uiRevision }; }
       if (method === 'setClipboardEnabled') { if (options.clipboardError) throw new Error(options.clipboardError); window.__remoteClipboard(params.enabled); return { enabled: params.enabled }; }
+      if (method === 'setLocalIme') { await options.localImeSave?.(params); const changes = options.store ? await options.store.call('preferences.localIme', {id: profile.id, enabled: params.enabled}) : {localIme: params.enabled}; profile = {...profile, ...changes}; return {localIme: profile.localIme}; }
       if (method === 'setAdaptive') { await options.adaptiveSave?.(params); const changes = options.store ? await options.store.call('preferences.adaptive', {id: profile.id, location: params.location, enabled: params.enabled}) : { ...profile, [params.location === 'window' ? 'adaptiveWindow' : 'adaptiveSidebar']: params.enabled }; profile = {...profile, ...changes}; return {adaptiveWindow: profile.adaptiveWindow ?? false, adaptiveSidebar: profile.adaptiveSidebar ?? false}; }
-      if (method === 'status') return options.status?.(params) ?? { state: 'connected', certificate: null, adaptiveWindow: (options.restore?.view?.profile ?? profile).adaptiveWindow ?? false, adaptiveSidebar: (options.restore?.view?.profile ?? profile).adaptiveSidebar ?? false };
+      if (method === 'status') return options.status?.(params) ?? { state: 'connected', certificate: null, localIme: (options.restore?.view?.profile ?? profile).localIme ?? false, adaptiveWindow: (options.restore?.view?.profile ?? profile).adaptiveWindow ?? false, adaptiveSidebar: (options.restore?.view?.profile ?? profile).adaptiveSidebar ?? false };
       return null;
     } },
   };
@@ -2224,6 +2226,36 @@ test('adaptive save failures keep selection and settings, and page handoff waits
 });
 
 
+test('local IME toggle is next to text input, persists per server and survives window handoff', async t => {
+  const {store,profile}=await profileStore(t);
+  const ui=await fixture(t,{store,profile}); ui.submit();
+  await until(()=>ui.toolbar().actions.some(a=>a.id==='local-ime'&&!a.disabled));
+  const actions=ui.toolbar().actions;
+  assert.equal(actions[actions.findIndex(a=>a.id==='input-text')+1].id,'local-ime');
+  assert.equal(ui.element('input-text').nextElementSibling.id,'local-ime');
+  assert.equal(ui.window.__localIme,false);
+  await ui.action('local-ime');
+  assert.equal(ui.window.__localIme,true); assert.equal(ui.element('local-ime').getAttribute('aria-pressed'),'true');
+  assert.equal((await store.call('profiles.get',profile)).localIme,true);
+  const restore=await ui.lifecycle().prepare({signal:new ui.window.AbortController().signal});
+  const moved=await fixture(t,{store,profile,restore,location:'window'});
+  assert.equal(moved.window.__localIme,true);
+  await moved.action('local-ime'); assert.equal(moved.window.__localIme,false);
+  assert.equal((await store.call('profiles.get',profile)).localIme,false);
+});
+
+test('failed IME persistence retains the old mode; handoff waits for an ongoing switch', async t => {
+  const gate=deferred(); let fail=true;
+  const ui=await fixture(t,{localImeSave:async()=>{if(fail)throw new Error('PROFILE_WRITE_FAILED');await gate.promise;}});
+  ui.submit(); await until(()=>ui.toolbar().actions.some(a=>a.id==='local-ime'&&!a.disabled));
+  await ui.action('local-ime'); assert.equal(ui.window.__localIme,false);
+  assert.match(ui.element('error-message').textContent,/save the input method/);
+  fail=false; const save=ui.action('local-ime'); let prepared=false;
+  const prepare=ui.lifecycle().prepare({signal:new ui.window.AbortController().signal}).then(value=>{prepared=true;return value;});
+  await new Promise(resolve=>setTimeout(resolve,40)); assert.equal(prepared,false);
+  gate.resolve(); await save; assert.equal((await prepare).view.profile.localIme,true);
+});
+
 test('text input preserves Unicode and whitespace across short receipts without sending Enter', async t => {
   const ui = await fixture(t, { location: 'window' });
   ui.submit(); await until(() => ui.element('status').textContent === 'Connected');
@@ -2311,7 +2343,7 @@ test('unchanged download polls leave controls untouched and changes update only 
   await until(() => ui.element('ui-lock').getAttribute('aria-pressed') === 'true' && !ui.element('ui-lock').disabled);
   assert.ok(changes.length > 0);
   assert.ok(changes.every(record => ui.element('ui-lock').contains(record.target)
-    || (record.target === ui.element('input-text') && record.attributeName === 'disabled')), 'Lock changes only update the lock action and text input availability');
+    || ([ui.element('input-text'), ui.element('local-ime')].includes(record.target) && record.attributeName === 'disabled')), 'Lock changes only update the lock action and text input availability');
 });
 
 for (const location of ['sidebar', 'window']) test(`explicit clipboard download in ${location} shares status, cancellation and Finder action`, async t => {

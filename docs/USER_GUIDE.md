@@ -36,11 +36,13 @@ macOS 鼠标移出再进入后的双光标修复，需要 Anas 5.2.12 或更新�
 
 侧边栏工具栏和独立窗口标题栏提供「输入文本」：可用本机输入法编辑多行内容，点击「输入到远程」或按 `Ctrl/⌘ + Enter` 发送，普通回车换行，不额外向远端发送回车。长文本按 Unicode 字符边界分批、等待回执并显示进度；发送中禁止重复提交和本地桌面输入。取消只停止未发出的部分，失败保留原文、已确认进度和剩余内容，提示可能部分输入，不自动重发。全部成功后才清空并关闭；页面交接保留草稿。
 
+「输入文本」右侧的输入法按钮可切换本地／远程输入，按服务器保存，默认远程。开启本地输入法后，在远程画面内点击再输入，本机组词、选字，确认的文字通过 Unicode 发送；候选框定位在最近点击处，不跟随远端文本光标。未确认的组合输入在失焦、再次点击、输入锁定或窗口交接时取消。常用快捷键和导航键继续发往远端；本机输入法切换不改变远端输入法状态。单次选字最多 128 个字符，长文本使用「输入文本」。部分程序不接受 Unicode 输入时切回远程模式。
+
 Windows 独立窗口隐藏系统最大化按钮，保留最小化和关闭；macOS 保留原生绿色按钮，自适应开启时可进入系统全屏。两平台工具栏始终保留尺寸操作：自适应开启时为全屏／退出全屏，关闭时换成「适配窗口大小」图标，点击恢复到当前允许的最大尺寸，仍可手动缩小。
 
 独立窗口关闭自适应时，可以手动缩小，最大尺寸限制为实际远端桌面对应的内容大小；无尺寸记录时适配实际画面，已有记录超过上限时收紧，远端分辨率变化时更新上限。此时最大化和全屏不可用。开启自适应后解除上限，恢复本次连接记住的普通窗口大小，没有记录时使用配置尺寸。此功能需要配套支持 `resizeWindow.maximumSize` 的 Anas 5.2.12 或更新版本宿主。窗口尺寸、显示器和位置由插件后台会话保留，侧栏往返和关闭后恢复可复用；全屏、最大化、侧栏尺寸及侧栏修改的远端分辨率不覆盖记录，断开后清除。首次和恢复尺寸允许超过显示器；原显示器仍连接时恢复原位置，否则放回当前屏幕，拖出标签优先使用鼠标落点。独立窗口画面最多按一个远程像素对应一个界面逻辑像素显示，空间不足时等比缩小；窄侧栏中的远端应用可能无法完整布局。自定义宽高须为 200～8192 的整数，宽度须为偶数，总像素不能超过 16,777,216。
 
-画面在可用空间内居中；独立窗口只缩小、不放大，侧边栏等比缩放。当前提供基本键鼠、证书信任和连接回收。声音、多显示器尚未提供。桌面直接键盘映射尚不支持本机输入法组合输入，可使用「输入文本」弹窗；远端输入法及复杂快捷键的效果依赖目标应用。
+画面在可用空间内居中；独立窗口只缩小、不放大，侧边栏等比缩放。当前提供基本键鼠、证书信任和连接回收。声音、多显示器尚未提供。可通过工具栏切换本地／远程输入法；远端输入法及复杂快捷键的效果依赖目标应用。
 
 包内包含 canvas 界面、原生会话程序和第三方声明，无需 Rust 或 Node。通用 ZIP 自动选择 Windows x64、macOS Apple Silicon／Intel 程序；本机构建 ZIP 仅含本机平台。macOS 程序为 ad-hoc 签名，未经 Apple 公证。
 
@@ -90,11 +92,13 @@ Each profile keeps an initial resolution (1280×800 by default) and independent 
 
 The sidebar toolbar and separate-window titlebar provide “Input text”. Compose multiline text with the local IME, then click “Input to remote” or press `Ctrl/⌘ + Enter`; plain Enter inserts a newline, and sending does not append a remote Enter key. Long text is split at Unicode character boundaries and sent sequentially with acknowledgements and progress. Duplicate submission and local desktop input are blocked while sending. Cancel stops only unsent batches. Failure retains the original, confirmed progress and remaining text, warns that input may be partial, and never automatically replays it. Only complete success clears and closes the dialog; page handoff preserves the draft.
 
+The input-method button immediately to the right of “Input text” switches between local and remote input. The choice is saved per server and defaults to remote. In local mode, click the desktop and compose with the local IME; committed text is sent as Unicode. Candidates appear near the last click, not at the remote text caret. Uncommitted composition is cancelled on focus loss, another click, input locking or page handoff. Common shortcuts and navigation keys still go to the remote computer; switching the local IME does not switch the remote IME. A single commit supports up to 128 characters; use “Input text” for longer text. Switch back to remote mode for applications that do not accept Unicode input.
+
 Separate windows hide the system maximize button on Windows while keeping minimize and close. macOS retains the native green button for system fullscreen when adaptation is enabled. Both platforms always offer a toolbar size action: fullscreen/exit fullscreen with adaptation enabled, or a distinct “Fit window to content” icon with adaptation disabled. Fitting restores the current allowed maximum size; manual shrinking remains available.
 
 With window adaptation disabled, separate windows can shrink, but cannot grow beyond the actual remote desktop size. Without a remembered size, they fit the actual frame; smaller remembered sizes are retained and oversized sizes are clamped. The limit updates when the remote resolution changes. Maximizing and fullscreen are unavailable. Enabling adaptation removes the limit and retains the normal window size remembered by the live plugin session, using the configured size if none is recorded. This behavior requires Anas 5.2.12 or later with `resizeWindow.maximumSize` support. Window size, display and position survive sidebar moves and closing/reopening a window; fullscreen, maximized and sidebar sizes or sidebar resolution changes never overwrite them. Disconnecting clears this memory. Initial and restored sizes may exceed the display. Windows return to the recorded display when available, otherwise the current screen; dragging out a tab takes precedence over the remembered position. Separate windows display at most one remote pixel per CSS pixel and scale down when needed. Remote applications may not fit very narrow sidebars. Custom dimensions must be integers from 200 to 8192, with even width and at most 16,777,216 pixels.
 
-The desktop is centered in the available space: separate windows scale down only, while the sidebar scales proportionally. Basic keyboard/mouse input, certificate trust, and cleanup are provided. Audio and multiple displays are not provided. Direct desktop key mapping does not support local IME composition; use the “Input text” dialog; remote IME and complex-shortcut behavior depends on the target application.
+The desktop is centered in the available space: separate windows scale down only, while the sidebar scales proportionally. Basic keyboard/mouse input, certificate trust, and cleanup are provided. Audio and multiple displays are not provided. Use the toolbar to switch between local and remote input methods; remote IME and complex-shortcut behavior depends on the target application.
 
 Packages include canvas UI, native session helpers, and notices; no Rust or Node is needed. Universal ZIPs select Windows x64 or Apple Silicon/Intel macOS helpers automatically; local builds contain only the local platform. macOS helpers are ad-hoc signed and not notarized.
 

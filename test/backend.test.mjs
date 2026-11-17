@@ -612,7 +612,7 @@ test('window size belongs to the live session, survives page closure and rejects
   assert.equal(await call('windowState.get', { owner: 'fixture', id: replacement.id }), null);
 });
 
-test('live adaptive preferences persist without unlocking full edits or accepting retired pages', async t => {
+test('live adaptive and IME preferences persist without unlocking full edits or accepting retired pages', async t => {
   const source = await readFile(join(packageDirectory, 'backend.cjs'), 'utf8');
   const directory = await mkdtemp(join(tmpdir(), 'rdp-live-preferences-'));
   let lease = { owner: 'page-1', epoch: 1 };
@@ -648,7 +648,19 @@ test('live adaptive preferences persist without unlocking full edits or acceptin
   assert.equal((await call('runtime.state',{})).sessions[0].profile.adaptiveWindow,true);
   await assert.rejects(call('profiles.save',{...saved,passwordAction:'keep'}),/RDP_PROFILE_ACTIVE/);
   await assert.rejects(call('setAdaptive',{...params,name:'Changed'}),/PROFILE_INVALID/);
+  const {location: unused, ...imeParams}=params;
+  assert.equal((await call('status',params)).localIme,false);
+  await call('setLocalIme',imeParams);
+  const imeSaved=await call('profiles.get',{id:profile.id});
+  assert.equal(imeSaved.localIme,true); assert.equal(imeSaved.adaptiveWindow,true); assert.equal(imeSaved.hasPassword,true);
+  assert.equal((await call('runtime.state',{})).sessions[0].profile.localIme,true);
+  await assert.rejects(call('setLocalIme',{...imeParams,enabled:'true'}),/PROFILE_INVALID/);
+  const ownId=caller.caller.instanceId; caller.caller.instanceId='other';
+  await assert.rejects(call('setLocalIme',imeParams),/RDP_PAGE_OWNER/); caller.caller.instanceId=ownId;
   lease={owner:'page-2',epoch:2};
+  await assert.rejects(call('setLocalIme',{...imeParams,enabled:false}),/RDP_OWNERSHIP_CHANGED/);
+  await call('setLocalIme',{...imeParams,pageId:'page-2',expectedEpoch:2,enabled:false});
+  assert.equal((await call('status',params)).localIme,false);
   await assert.rejects(call('setAdaptive',{...params,enabled:false}),/RDP_OWNERSHIP_CHANGED/);
   await assert.rejects(call('setAdaptive',{...params,pageId:'page-2',expectedEpoch:2,location:'sidebar'}),/RDP_PAGE_OWNER/);
   await call('setAdaptive',{...params,pageId:'page-2',expectedEpoch:2,enabled:false});

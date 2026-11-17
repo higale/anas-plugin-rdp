@@ -90,6 +90,10 @@
               "type": "boolean",
               "description": "Disable local cursor animation. Defaults to false; does not change remote input or screenshots."
             },
+            "local_ime": {
+              "type": "boolean",
+              "description": "Use the local input method for direct desktop typing. Default false (remote scan codes)."
+            },
             "adaptive_window": {
               "type": "boolean",
               "description": "Adapt remote resolution to the detached window. Default false."

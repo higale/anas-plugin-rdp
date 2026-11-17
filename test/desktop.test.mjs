@@ -5,9 +5,10 @@ import { build } from 'esbuild';
 
 const compiled = await build({ entryPoints: ['src/ui/desktop.ts'], bundle: true, write: false, format: 'iife', globalName: 'RdpDesktop' });
 
-function cursorFixture(t, { disableMouseAnimation = false, reducedMotion = false } = {}) {
+function cursorFixture(t, { disableMouseAnimation = false, reducedMotion = false, platform = 'Win32' } = {}) {
   const dom = new JSDOM('<main></main>', { runScripts: 'outside-only' });
   const { window } = dom;
+  Object.defineProperty(window.navigator, 'platform', { value:platform });
   const sent = [], draws = [], resizeErrors = [], capabilities = [], states = [], clipboards = [];
   let socket, resized, time = 0, nextFrame = 0;
   const frames = new Map();
@@ -352,4 +353,95 @@ test('display capability snapshots update independently of frames and are restor
   assert.equal(ui.draws.length,frames);
   const restored = cursorFixture(t); restored.snapshot({resizeSupported:true});
   assert.deepEqual(restored.capabilities,[true]);
+});
+
+function localInput(ui) {
+  ui.desktop.setLocalIme(true, 'Local input method');
+  ui.desktop.canvas.setPointerCapture = () => {};
+  ui.desktop.canvas.dispatchEvent(new ui.window.MouseEvent('pointerdown', { clientX: 80, clientY: 40 }));
+  const field = ui.window.document.querySelector('.local-ime');
+  assert.equal(ui.window.document.activeElement, field);
+  ui.sent.length = 0;
+  return {
+    field,
+    key: (code, key, extra = {}, type = 'keydown') => field.dispatchEvent(new ui.window.KeyboardEvent(type, {code, key, bubbles:true, cancelable:true, ...extra})),
+    compose: (type, data = '') => field.dispatchEvent(new ui.window.CompositionEvent(type, {data})),
+    text: (text, extra = {}) => { field.value = text; field.dispatchEvent(new ui.window.InputEvent('input', {data:text, inputType:'insertText', ...extra})); },
+  };
+}
+
+test('local composition sends only the committed Unicode before subsequent Enter and click', t => {
+  const ui = cursorFixture(t), ime = localInput(ui);
+  ime.key('KeyN', 'Process', {keyCode:229});
+  ime.compose('compositionstart');
+  ime.text('nihao', {isComposing:true});
+  ime.key('Space', ' ', {isComposing:true});
+  assert.equal(ui.sent.length, 0);
+  ime.compose('compositionend', '你好😀');
+  ime.key('Space', ' ', {}, 'keyup');
+  ime.text(''); // Chromium's final input following compositionend.
+  ime.key('Enter', 'Enter');
+  ime.key('Enter', 'Enter', {}, 'keyup');
+  ui.move(90,50);
+  assert.deepEqual(ui.sent.map(e => e.type), ['text','key','key','mouse']);
+  assert.equal(ui.sent[0].text, '你好😀');
+  assert.equal(ui.sent[1].code, 28);
+  assert.equal(ui.sent[0].epoch, 1);
+});
+
+test('IME cancellation never reaches host shortcuts and still permits the native default action', t => {
+  const ui=cursorFixture(t), ime=localInput(ui), host=[];
+  ui.window.addEventListener('keydown', event=>host.push(event.key));
+  ime.compose('compositionstart');
+  assert.equal(ime.key('Escape','Escape',{isComposing:false}),true);
+  ime.compose('compositionend','');
+  assert.equal(ime.key('Escape','Escape',{keyCode:229,isComposing:false}),true);
+  assert.deepEqual(host,[]);
+  assert.equal(ui.sent.length,0);
+  ime.key('Escape','Escape');
+  assert.equal(ui.sent.at(-1).type,'key');
+});
+
+test('local ASCII, dead keys, modifiers and shortcuts do not duplicate text or strand keys', t => {
+  const ui = cursorFixture(t), ime = localInput(ui);
+  ime.key('ShiftLeft','Shift',{shiftKey:true});
+  ime.key('KeyA','A',{shiftKey:true}); ime.text('A');
+  ime.key('KeyA','A',{shiftKey:true},'keyup'); ime.key('ShiftLeft','Shift',{},'keyup');
+  ime.key('Quote','Dead'); ime.compose('compositionstart'); ime.compose('compositionend','é');
+  ime.key('ControlLeft','Control',{ctrlKey:true});
+  ime.key('KeyC','c',{ctrlKey:true});
+  ime.key('ControlLeft','Control',{},'keyup');
+  ime.key('KeyC','c',{},'keyup');
+  assert.deepEqual(ui.sent.filter(e=>e.type==='text').map(e=>e.text),['A','é']);
+  assert.deepEqual(ui.sent.filter(e=>e.type==='key').map(e=>[e.code,e.down]),[[29,true],[46,true],[29,false],[46,false]]);
+  ui.sent.length=0;
+  ime.key('ControlLeft','Control',{ctrlKey:true}); ime.key('Space',' ',{ctrlKey:true});
+  ime.key('Space',' ',{ctrlKey:true},'keyup'); ime.key('ControlLeft','Control',{},'keyup');
+  assert.equal(ui.sent.length,0,'local input-method switch stays local');
+});
+
+test('lock, lease change, blur, blocking and switching off discard uncommitted local text', t => {
+  for (const stop of [ui=>ui.desktop.setInputBlocked(true), ui=>ui.snapshot({uiLocked:true,uiRevision:1}), ui=>ui.snapshot({epoch:2}), ui=>ui.snapshot({owner:'other'}), ui=>ui.desktop.setLocalIme(false,'local'), ui=>ui.window.dispatchEvent(new ui.window.Event('blur'))]) {
+    const ui=cursorFixture(t), ime=localInput(ui);
+    ime.compose('compositionstart'); ime.text('unfinished',{isComposing:true});
+    stop(ui);
+    ime.compose('compositionend','旧文字'); ime.text('迟到文字');
+    assert.equal(ui.sent.filter(e=>e.type==='text').length,0);
+  }
+});
+
+test('remote mode continues forwarding scan codes and does not show the local receiver', t => {
+  const ui=cursorFixture(t);
+  ui.desktop.canvas.dispatchEvent(new ui.window.KeyboardEvent('keydown',{code:'KeyA',key:'a',cancelable:true}));
+  assert.equal(ui.sent.at(-1).type,'key'); assert.equal(ui.sent.at(-1).code,30);
+  assert.equal(ui.window.document.querySelector('.local-ime').hidden,true);
+});
+
+test('macOS Option text stays local while Option navigation remains a remote chord', t => {
+  const ui=cursorFixture(t,{platform:'MacIntel'}), ime=localInput(ui);
+  ime.key('AltLeft','Alt',{altKey:true}); ime.key('KeyE','Dead',{altKey:true});
+  ime.compose('compositionstart'); ime.compose('compositionend','é'); ime.key('AltLeft','Alt',{},'keyup');
+  assert.deepEqual(ui.sent.map(e=>e.type),['text']); assert.equal(ui.sent[0].text,'é');
+  ime.key('ArrowLeft','ArrowLeft',{altKey:true}); ime.key('ArrowLeft','ArrowLeft',{altKey:true},'keyup'); ime.key('AltLeft','Alt',{},'keyup');
+  assert.deepEqual(ui.sent.filter(e=>e.type==='key').map(e=>[e.code,e.down]),[[56,true],[75,true],[75,false],[56,false]]);
 });

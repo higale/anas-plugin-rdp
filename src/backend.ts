@@ -153,6 +153,8 @@ async function createSession(input: Record<string, unknown>, owner: string, sign
   if (openMode !== 'sidebar' && openMode !== 'window') throw new Error('Invalid connection location.');
   const clipboardSupport = input.clipboardSupport === undefined ? false : input.clipboardSupport;
   if (typeof clipboardSupport !== 'boolean') throw new Error('Invalid clipboard setting.');
+  const localIme = input.localIme === undefined ? false : input.localIme;
+  if (typeof localIme !== 'boolean') throw new Error('PROFILE_INVALID');
   const disableMouseAnimation = input.disableMouseAnimation === undefined ? false : input.disableMouseAnimation;
   if (typeof disableMouseAnimation !== 'boolean') throw new Error('Invalid mouse animation setting.');
   const adaptiveWindow = input.adaptiveWindow === undefined ? false : input.adaptiveWindow, adaptiveSidebar = input.adaptiveSidebar === undefined ? false : input.adaptiveSidebar;
@@ -162,7 +164,7 @@ async function createSession(input: Record<string, unknown>, owner: string, sign
   const binary = join(context.packageDirectory, 'native', `${process.platform}-${process.arch}`, `anas-rdp-session${process.platform === 'win32' ? '.exe' : ''}`);
   if (stopping) throw new Error('RDP_BACKEND_STOPPING');
   const child = spawn(binary, ['--session'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-  const session: Session = { profile: { id: owner, name, host, port: Number(port), username, domain, openMode, clipboardSupport, adaptiveWindow, adaptiveSidebar, disableMouseAnimation, desktopWidth, desktopHeight }, owner, child, state: 'starting', display: { id, token, url: '' }, requests: new Map(), exited: Promise.resolve(), closed: false,
+  const session: Session = { profile: { id: owner, name, host, port: Number(port), username, domain, openMode, clipboardSupport, adaptiveWindow, adaptiveSidebar, disableMouseAnimation, localIme, desktopWidth, desktopHeight }, owner, child, state: 'starting', display: { id, token, url: '' }, requests: new Map(), exited: Promise.resolve(), closed: false,
     changed: new Set(), uiLocked: false, clipboardEnabled: false, clipboardActive: false, clipboardPublish: false, clipboardState: clipboardSupport ? 'initializing' : 'disabled', clipboardErrors: 0 };
   session.exited = new Promise(resolve => child.once('close', () => {
     session.closed = true; session.windowState = undefined; session.uiLocked = false; session.clipboardEnabled = false;
@@ -229,7 +231,7 @@ export function call(method: string, params: unknown, caller: CallContext & { si
   }
   // Serialize configuration writes with resource creation: a stale page cannot
   // save/delete between checking the running state and committing its changes.
-  if (['setAdaptive', 'disconnect', 'setClipboardEnabled', 'connection.open', 'connection.close', 'profiles.save', 'profiles.savePassword', 'profiles.delete', 'profiles.beginEdit', 'profiles.endEdit', 'profiles.launch', 'profiles.cancelLaunch'].includes(method)) {
+  if (['setLocalIme', 'setAdaptive', 'disconnect', 'setClipboardEnabled', 'connection.open', 'connection.close', 'profiles.save', 'profiles.savePassword', 'profiles.delete', 'profiles.beginEdit', 'profiles.endEdit', 'profiles.launch', 'profiles.cancelLaunch'].includes(method)) {
     return changeResource(() => {
       if (['profiles.save', 'profiles.savePassword', 'profiles.delete'].includes(method) && (running(record(params).id) || serverChanges.has(String(record(params).id)))) throw new Error('RDP_PROFILE_ACTIVE');
       return execute(method, params, caller);
@@ -304,7 +306,7 @@ async function execute(method: string, params: unknown, caller: CallContext, sig
   if (!session && method === 'disconnect') return null;
   if (!session) throw new Error('RDP_SESSION_CLOSED');
   if (session.owner !== owner) throw new Error('Connection does not belong to this resource owner.');
-  if (method === 'status') return { state: session.state, certificate: session.certificate ?? null, clipboardEnabled: session.clipboardEnabled, clipboardState: session.clipboardState, adaptiveWindow: session.profile.adaptiveWindow, adaptiveSidebar: session.profile.adaptiveSidebar };
+  if (method === 'status') return { state: session.state, certificate: session.certificate ?? null, clipboardEnabled: session.clipboardEnabled, clipboardState: session.clipboardState, adaptiveWindow: session.profile.adaptiveWindow, adaptiveSidebar: session.profile.adaptiveSidebar, localIme: session.profile.localIme };
   if (method === 'windowState.get') return session.windowState ? requireWindowState(session.windowState) : null;
   if (method === 'windowState.set') {
     const windowState = requireWindowState(input);
@@ -314,6 +316,16 @@ async function execute(method: string, params: unknown, caller: CallContext, sig
     if (!lease.owner || lease.owner !== input.pageId || lease.epoch !== input.expectedEpoch) throw new Error('RDP_OWNERSHIP_CHANGED');
     session.windowState = windowState;
     return null;
+  }
+  if (method === 'setLocalIme') {
+    if (Object.keys(input).some(key => !['owner', 'id', 'pageId', 'expectedEpoch', 'enabled'].includes(key)) || typeof input.enabled !== 'boolean') throw new Error('PROFILE_INVALID');
+    if (caller.caller?.instanceId !== owner) throw new Error('RDP_PAGE_OWNER');
+    if (!active(session) || session.state !== 'connected') throw new Error('RDP_NOT_CONNECTED');
+    const lease = await command(session, 'lease', {}) as { owner: string | null; epoch: number };
+    if (!lease.owner || lease.owner !== input.pageId || lease.epoch !== input.expectedEpoch) throw new Error('RDP_OWNERSHIP_CHANGED');
+    const profile = await profiles.call('preferences.localIme', { id: owner, enabled: input.enabled }, signal) as Profile;
+    session.profile.localIme = profile.localIme;
+    return { localIme: profile.localIme };
   }
   if (method === 'setAdaptive') {
     if (Object.keys(input).some(key => !['owner', 'id', 'pageId', 'expectedEpoch', 'location', 'enabled'].includes(key))
@@ -365,7 +377,7 @@ async function execute(method: string, params: unknown, caller: CallContext, sig
   if (method === 'disconnect') return disconnect(resourceId);
   throw new Error('Unknown RDP operation.');
 }
-const profileFields = { name: 'name', host: 'host', port: 'port', username: 'username', domain: 'domain', open_mode: 'openMode', clipboard_support: 'clipboardSupport', adaptive_window: 'adaptiveWindow', adaptive_sidebar: 'adaptiveSidebar', disable_mouse_animation: 'disableMouseAnimation', desktop_width: 'desktopWidth', desktop_height: 'desktopHeight' } as const;
+const profileFields = { name: 'name', host: 'host', port: 'port', username: 'username', domain: 'domain', open_mode: 'openMode', clipboard_support: 'clipboardSupport', adaptive_window: 'adaptiveWindow', adaptive_sidebar: 'adaptiveSidebar', disable_mouse_animation: 'disableMouseAnimation', local_ime: 'localIme', desktop_width: 'desktopWidth', desktop_height: 'desktopHeight' } as const;
 function profileChanges(value: unknown) {
   const input = record(value), changes: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {
