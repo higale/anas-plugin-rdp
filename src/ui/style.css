@@ -104,3 +104,5 @@ body[data-location=window] #desktop canvas{flex:none;width:auto;height:auto;max-
 
 .local-ime{position:absolute;left:0;top:0;width:1px;height:1px;min-height:0;opacity:0;pointer-events:none;resize:none;border:0;padding:0;font:inherit;z-index:2}
 .local-ime.composing{width:min(220px,100%);height:var(--control-height);padding:4px 8px;opacity:1;border:1px solid var(--accent);border-radius:4px;background:var(--panel);color:var(--text)}
+
+#download-offer{position:fixed;top:56px;right:12px;z-index:6;box-sizing:border-box;max-width:calc(100vw - 24px);display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--panel);box-shadow:0 4px 18px #0003;font-size:.9rem}body[data-location="window"] #download-offer{top:12px}#download-offer[hidden]{display:none}#download-summary{overflow-wrap:anywhere}#download-offer button{flex-shrink:0}

@@ -109,7 +109,7 @@ impl Downloads {
             command["revision"].as_u64() == Some(offer.revision),
             "RDP_DOWNLOAD_CHANGED"
         );
-        paths(&offer.files)?;
+        let reveal_path = reveal_path(&directory, &paths(&offer.files)?);
         self.cancel.store(false, Ordering::SeqCst);
         let id = next_id();
         state.data_id = offer.data_id;
@@ -142,7 +142,11 @@ impl Downloads {
                     "failed"
                 });
                 if result.is_ok() || cleanup_failed {
-                    value["path"] = json!(directory);
+                    value["path"] = json!(if result.is_ok() {
+                        &reveal_path
+                    } else {
+                        &directory
+                    });
                 }
                 if let Err(error) = result {
                     value["error"] = json!(if cleanup_failed {
@@ -222,6 +226,19 @@ fn paths(files: &[FileDescriptor]) -> Result<Vec<PathBuf>> {
             Ok(path)
         })
         .collect()
+}
+// Reveal the copied root, not its destination parent, when there is one root.
+// Nested descriptors belong to the same copied folder.
+fn reveal_path(directory: &Path, paths: &[PathBuf]) -> PathBuf {
+    let roots: HashSet<_> = paths
+        .iter()
+        .filter_map(|path| path.components().next())
+        .collect();
+    if roots.len() == 1 {
+        directory.join(roots.into_iter().next().unwrap())
+    } else {
+        directory.to_path_buf()
+    }
 }
 fn check(shared: &Shared) -> Result<()> {
     ensure!(
@@ -592,6 +609,24 @@ mod tests {
         }
     }
     #[test]
+    fn reveal_selects_one_copied_root_or_the_shared_destination() {
+        let directory = Path::new("/destination");
+        for (names, expected) in [
+            (vec!["file.txt"], "/destination/file.txt"),
+            (vec!["folder"], "/destination/folder"),
+            (
+                vec!["folder", "folder/sub", "folder/sub/你好🐟.txt"],
+                "/destination/folder",
+            ),
+            (vec!["folder/a", "folder/b"], "/destination/folder"),
+            (vec!["a.txt", "b.txt"], "/destination"),
+            (vec!["folder/a", "other/b"], "/destination"),
+        ] {
+            let paths = names.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+            assert_eq!(reveal_path(directory, &paths), PathBuf::from(expected));
+        }
+    }
+    #[test]
     fn failed_reads_clean_only_the_current_download_and_allow_retry() {
         let (clipboard, _events, _network) = super::super::tests::bridge();
         let directory = temp();
@@ -633,6 +668,10 @@ mod tests {
         let worker = downloads.state.lock().unwrap().worker.take().unwrap();
         worker.join().unwrap();
         assert_eq!(downloads.snapshot()["transfer"]["state"], "completed");
+        assert_eq!(
+            downloads.snapshot()["transfer"]["path"],
+            json!(directory.join("empty"))
+        );
         assert_eq!(clipboard.shared.activity.lock().unwrap().readers, 0);
         fs::remove_dir_all(directory).unwrap();
     }

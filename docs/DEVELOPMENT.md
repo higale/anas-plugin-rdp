@@ -144,7 +144,7 @@ CLIPRDR 未完成协商时状态为 `initializing`；IronRDP 的 `on_ready` 通�
 
 ### macOS 显式下载
 
-`native/src/clipboard/download.rs` 管理每条连接的文件清单和单个后台下载任务；`downloadStatus`、`downloadStart`、`downloadCancel` 只返回状态，不通过页面 RPC 传输文件内容。页面约每 750ms 读取状态，标题栏与侧栏复用下载动作；页面交接后重新读取同一原生会话。目录选择使用宿主 `anas.selectDirectory`，文件定位使用 `anas.showItemInFolder`，需包含这两个通用接口的宿主版本。选择目录期间不占据标题栏动作回执或后台队列。
+`native/src/clipboard/download.rs` 管理每条连接的文件清单和单个后台下载任务；`downloadStatus`、`downloadStart`、`downloadCancel` 只返回状态，不通过页面 RPC 传输文件内容。页面约每 750ms 读取状态，侧栏和独立窗口均在收到新 revision 的文件清单时显示右上角摘要气泡和下载按钮，不在标题栏保留下载图标。气泡约 6 秒后消失，悬停、焦点和目录选择期间暂停计时，再次复制重新显示；页面交接后重新读取同一原生会话。目录选择使用宿主 `anas.selectDirectory`，文件定位使用 `anas.showItemInFolder`，成功时单个顶层项目定位到该文件或文件夹（嵌套清单仍算同一根目录），多个顶层项目或清理失败时定位到保存目录；需包含这两个通用接口的宿主版本。选择目录期间不占据标题栏动作回执或后台队列。
 
 复制阶段只请求清单；开始下载时校验清单 revision，持有传输占用并按原文件索引、协议锁 ID 分块读取。清单更新后不再提供旧入口；已锁定任务继续使用自己的清单，未锁定任务停止，锁被上游回收时也停止。暂停活动发布、切换连接或重建页面不改变任务归属。完成、取消及失败均释放占用；每条读取最多等待 120 秒，取消／断开以约 100ms 粒度解除网络等待，不设整个下载的总时长上限。
 

@@ -88,7 +88,7 @@ module.exports = { ...module.exports, call: (method, params, context) => method 
   await remote(`Add-Type -AssemblyName System.Windows.Forms; $d=${remoteRoot}; New-Item -ItemType Directory -Path ($d+'\\子目录') -Force | Out-Null; [IO.File]::WriteAllText($d+'\\子目录\\你好🐟.txt','download 🐟'); [IO.File]::WriteAllBytes($d+'\\empty',([byte[]]@())); $s=[IO.File]::Create($d+'\\large.bin'); $b=New-Object byte[] 1048576; 1..${fileMiB} | ForEach-Object {$s.Write($b,0,$b.Length)}; $s.Close(); $list=New-Object System.Collections.Specialized.StringCollection; [void]$list.Add($d); [Windows.Forms.Clipboard]::SetFileDropList($list)`);
   await main.bringToFront(); await frame.locator('#title').click();
   console.log('copy activity:', (await frame.evaluate(()=>anas.getContext())).view.activity);
-  try { await expect(frame.locator('#download')).toBeVisible({timeout:30000}); } catch (error) {
+  try { await expect(frame.locator('#download')).toBeEnabled({timeout:30000}); } catch (error) {
     const clip = await app.evaluate(({clipboard})=>clipboard.readText());
     if (clip.startsWith('download-setup-error:')) console.error('Remote test data preparation failed.');
     throw error;
@@ -122,7 +122,7 @@ module.exports = { ...module.exports, call: (method, params, context) => method 
   const completed = (await downloadStatus(frame)).transfer;
   assert.equal(completed.id,started.transfer.id);
   const fs = await import('node:fs/promises');
-  assert.equal(completed.path, destination);
+  assert.equal(completed.path, join(destination, copyId));
   assert.deepEqual(await fs.readdir(destination), [copyId], 'No generated wrapper directory');
   const actual = join(destination,copyId);
   assert.equal((await fs.stat(join(actual,'large.bin'))).size,fileMiB*1048576);
@@ -137,8 +137,8 @@ module.exports = { ...module.exports, call: (method, params, context) => method 
   console.log('previous phase complete:', phase); phase = 'conflict';
   await remote(`Add-Type -AssemblyName System.Windows.Forms; $list=New-Object System.Collections.Specialized.StringCollection; [void]$list.Add((${remoteRoot})); [Windows.Forms.Clipboard]::SetFileDropList($list)`);
   await detached.bringToFront(); await frame.locator('#download-status').click();
-  await expect(detached.getByRole('button',{name:/Download remote files/})).toBeVisible({timeout:30000});
-  await detached.getByRole('button',{name:/Download remote files/}).click();
+  await expect(frame.locator('#download-offer')).toBeVisible({timeout:30000});
+  await frame.locator('#download').click();
   await expect.poll(async()=> (await downloadStatus(frame))?.transfer?.error,{timeout:10000}).toBe('RDP_DOWNLOAD_EXISTS');
   await expect(frame.locator('#download-error')).toContainText('same name');
   assert.equal((await fs.stat(join(actual,'large.bin'))).size,fileMiB*1048576);
@@ -146,7 +146,9 @@ module.exports = { ...module.exports, call: (method, params, context) => method 
   const retryDestination = join(directory,'retry-downloads'); await mkdir(retryDestination);
   await writeFile(join(retryDestination,'existing.txt'),'preserve');
   await app.evaluate(({dialog},folder)=>{dialog.showOpenDialog=async()=>({canceled:false,filePaths:[folder]});},retryDestination);
-  await detached.getByRole('button',{name:/Download remote files/}).click();
+  await remote(`Add-Type -AssemblyName System.Windows.Forms; $list=New-Object System.Collections.Specialized.StringCollection; [void]$list.Add((${remoteRoot})); [Windows.Forms.Clipboard]::SetFileDropList($list)`);
+  await expect(frame.locator('#download-offer')).toBeVisible({timeout:30000});
+  await frame.locator('#download').click();
   await expect.poll(async()=> (await downloadStatus(frame))?.transfer?.bytes ?? 0,{timeout:30000}).toBeGreaterThan(0);
   await frame.locator('#download-cancel').click();
   await expect.poll(async()=> (await downloadStatus(frame))?.transfer?.state,{timeout:10000}).toBe('cancelled');
@@ -154,7 +156,9 @@ module.exports = { ...module.exports, call: (method, params, context) => method 
   assert.deepEqual(await fs.readdir(retryDestination),['existing.txt']);
   assert.equal(await readFile(join(retryDestination,'existing.txt'),'utf8'),'preserve');
   console.log('previous phase complete:', phase); phase = 'disconnect-cleanup';
-  await detached.getByRole('button',{name:/Download remote files/}).click();
+  await remote(`Add-Type -AssemblyName System.Windows.Forms; $list=New-Object System.Collections.Specialized.StringCollection; [void]$list.Add((${remoteRoot})); [Windows.Forms.Clipboard]::SetFileDropList($list)`);
+  await expect(frame.locator('#download-offer')).toBeVisible({timeout:30000});
+  await frame.locator('#download').click();
   await expect.poll(async()=> (await downloadStatus(frame))?.transfer?.state,{timeout:10000}).toBe('running');
   await expect.poll(async()=> (await downloadStatus(frame))?.transfer?.bytes ?? 0,{timeout:30000}).toBeGreaterThan(0);
   await backend('server.close',{profile_id:profile.id});
@@ -167,7 +171,7 @@ module.exports = { ...module.exports, call: (method, params, context) => method 
   await cleanupRemote(); cleanupRemote = undefined;
   await pause(1000);
   await backend('server.close',{profile_id:profile.id});
-  console.log(`PASS: real macOS ${fileMiB} MiB direct download SHA256, same-name conflict, Unicode/emoji folders, empty files, clipboard replacement, sidebar-to-window handoff, titlebar download, cancellation/disconnect cleanup, directory picker contract and Finder routing.`);
+  console.log(`PASS: real macOS ${fileMiB} MiB direct download SHA256, same-name conflict, Unicode/emoji folders, empty files, clipboard replacement, sidebar-to-window handoff, transient download notification, cancellation/disconnect cleanup, directory picker contract and Finder routing.`);
 } catch (error) {
   let message=String(error?.stack??error);
   for (const value of [config.host,config.username,config.password]) if(value) message=message.split(value).join('[redacted]');

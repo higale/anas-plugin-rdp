@@ -151,7 +151,7 @@
     "failed": "Input failed and may be partially delivered. Only acknowledged batches count as confirmed. Check the remote content and edit the remaining text before sending again."
   },
   "download": {
-    "action": "Download remote files to this Mac ({{count}} items)",
+    "action": "Download",
     "progress": "Downloading {{bytes}} / {{total}}",
     "completed": "Download completed",
     "cancelled": "Download cancelled",
@@ -168,6 +168,8 @@
     "cleanup_error": "Some partial files could not be removed. Open the folder to check them.",
     "busy": "This connection already has an active download.",
     "update_host": "Update Anas to use the directory picker.",
-    "reveal_error": "Could not show the files in Finder. Check that they still exist."
+    "reveal_error": "Could not show the files in Finder. Check that they still exist.",
+    "selecting": "Choosing a download folder…",
+    "summary": "Remote file list received ({{count}} items)"
   }
 }

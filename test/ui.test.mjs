@@ -2335,9 +2335,8 @@ test('unchanged download polls leave controls untouched and changes update only 
   await until(() => polls >= start + 2);
   assert.equal(changes.length, 0, 'Polling unchanged download state must not rewrite button DOM');
   count = 4;
-  await until(() => ui.element('download').dataset.tooltip.includes('4 items'));
-  assert.ok(changes.length > 0);
-  assert.ok(changes.every(record => record.target === ui.element('download')), 'A new download offer must not rewrite other buttons');
+  await until(() => ui.element('download-summary').textContent.includes('4 items'));
+  assert.equal(changes.length, 0, 'Download offers must not rewrite toolbar buttons');
   changes.length = 0;
   ui.element('ui-lock').click();
   await until(() => ui.element('ui-lock').getAttribute('aria-pressed') === 'true' && !ui.element('ui-lock').disabled);
@@ -2347,7 +2346,7 @@ test('unchanged download polls leave controls untouched and changes update only 
 });
 
 for (const location of ['sidebar', 'window']) test(`explicit clipboard download in ${location} shares status, cancellation and Finder action`, async t => {
-  let state = { offer: { revision: 10, count: 3 }, transfer: null };
+  let state = { offer: null, transfer: null };
   let selected = false;
   const ui = await fixture(t, { location, profile: { clipboardSupport: true }, selectDirectory: async () => { selected = true; return '/chosen'; }, download: async (method, params) => {
     if (method === 'downloadStart') { assert.equal(params.directory, '/chosen'); assert.equal(params.revision, 10); state.transfer = { id: 'task', state: 'running', bytes: 10, total: 100, count: 3, completed: 0 }; }
@@ -2356,20 +2355,23 @@ for (const location of ['sidebar', 'window']) test(`explicit clipboard download 
   } });
   ui.submit(); await until(() => ui.element('status').textContent === 'Connected');
   ui.element('clipboard').click();
-  await until(() => !ui.element('download').hidden);
-  assert.match(ui.element('download').dataset.tooltip, /3 items/);
+  assert.equal(ui.element('download-offer').hidden, true);
+  assert.equal(ui.element('connection-actions').querySelector('#download'), null);
+  state.offer = { revision: 10, count: 3 };
+  await until(() => !ui.element('download').disabled);
+  assert.match(ui.element('download-summary').textContent, /Remote file list received \(3 items\)/);
   assert.equal(selected, false); assert.equal(ui.calls.some(call => call.method === 'downloadStart'), false);
-  if (location === 'window') await ui.action('download'); else ui.element('download').click();
+  ui.element('download').click();
   await until(() => !ui.element('download-cancel').hidden);
   assert.equal(ui.element('download-progress').value, 10);
   assert.equal(ui.element('download').disabled, true);
   ui.element('download-cancel').click();
   await until(() => ui.element('download-message').textContent === 'Download cancelled');
   assert.equal(ui.element('download-cancel').hidden, true);
-  state.transfer = { ...state.transfer, state: 'completed', bytes: 100, path: '/chosen' };
+  state.transfer = { ...state.transfer, state: 'completed', bytes: 100, path: '/chosen/copied-folder' };
   await until(() => !ui.element('download-reveal').hidden);
   ui.element('download-reveal').click();
-  await until(() => ui.calls.some(call => call.method === 'showItemInFolder' && call.params === '/chosen'));
+  await until(() => ui.calls.some(call => call.method === 'showItemInFolder' && call.params === '/chosen/copied-folder'));
   ui.element('download-dismiss').click(); assert.equal(ui.element('download-status').hidden, true);
 });
 
@@ -2381,8 +2383,8 @@ test('directory cancellation and changed remote metadata never silently start a 
   } });
   ui.submit(); await until(() => ui.element('status').textContent === 'Connected'); ui.element('clipboard').click();
   await until(() => !ui.element('download').hidden);
-  await ui.action('download'); await until(() => !ui.element('download').disabled); assert.equal(ui.calls.some(call => call.method === 'downloadStart'), false);
-  chosen = '/chosen'; await ui.action('download');
+  ui.element('download').click(); await until(() => !ui.element('download').disabled); assert.equal(ui.calls.some(call => call.method === 'downloadStart'), false);
+  chosen = '/chosen'; ui.element('download').click();
   await until(() => !ui.element('download-status').hidden);
   assert.match(ui.element('download-message').textContent, /clipboard changed/);
   ui.element('download-dismiss').click(); assert.equal(ui.element('download-status').hidden, true);
@@ -2395,7 +2397,7 @@ test('moving a page while the directory picker is open cannot start a late downl
     download: async () => ({offer:{revision:1,count:1},transfer:null}) });
   ui.submit(); await until(() => ui.element('status').textContent === 'Connected'); ui.element('clipboard').click();
   await until(() => !ui.element('download').hidden);
-  await ui.action('download'); await until(() => ui.element('download').disabled);
+  ui.element('download').click(); await until(() => ui.element('download').disabled);
   await ui.lifecycle().prepare({signal:new ui.window.AbortController().signal,context:ui.context});
   selection.resolve('/chosen'); await new Promise(resolve=>setTimeout(resolve,30));
   assert.equal(ui.calls.some(call=>call.method==='downloadStart'),false);
@@ -2411,4 +2413,28 @@ for (const location of ['sidebar', 'window']) test(`native pointer exits reach t
   assert.equal(ui.calls.length, calls, 'Cursor cleanup must not send a backend operation');
   await ui.lifecycle().dispose({ signal: new ui.window.AbortController().signal, context: ui.context, reason: 'closed' });
   assert.equal(ui.window.__pointerLeave, undefined);
+});
+
+for (const location of ['sidebar', 'window']) test(`file offer bubble in ${location} expires, pauses on hover/focus, and reopens only on a fresh copy`, async t => {
+  let revision = 1;
+  const ui = await fixture(t, { location, profile: { clipboardSupport: true }, download: async () => ({ offer: { revision, count: 2 }, transfer: null }) });
+  // Capture only the notification's six-second timer; keep polling and other UI timers real.
+  const timers = new Map(); let id = 90000;
+  const originalSet = ui.window.setTimeout.bind(ui.window), originalClear = ui.window.clearTimeout.bind(ui.window);
+  ui.window.setTimeout = (fn, delay, ...args) => delay === 6000 ? (timers.set(++id, fn), id) : originalSet(fn, delay, ...args);
+  ui.window.clearTimeout = token => { timers.delete(token); originalClear(token); };
+  const expire = () => { const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach(fn => fn()); };
+  ui.submit(); await until(() => ui.element('status').textContent === 'Connected'); ui.element('clipboard').click();
+  await until(() => !ui.element('download-offer').hidden);
+  assert.equal(ui.toolbar()?.actions.some(action => action.id === 'download') ?? false, false);
+  const bubble = ui.element('download-offer');
+  bubble.dispatchEvent(new ui.window.MouseEvent('mouseenter')); assert.equal(timers.size, 0);
+  expire(); assert.equal(bubble.hidden, false);
+  bubble.dispatchEvent(new ui.window.MouseEvent('mouseleave')); assert.equal(timers.size, 1);
+  ui.element('download').focus(); assert.equal(timers.size, 0);
+  ui.element('download').blur(); assert.equal(timers.size, 1);
+  expire(); assert.equal(bubble.hidden, true);
+  await new Promise(resolve => setTimeout(resolve, 850)); assert.equal(bubble.hidden, true);
+  revision++; await until(() => !bubble.hidden); assert.equal(timers.size, 1);
+  ui.element('clipboard').click(); await until(() => bubble.hidden); assert.equal(timers.size, 0);
 });

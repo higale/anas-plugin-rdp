@@ -80,12 +80,45 @@ let dismissedDownload = '';
 let downloadIssue: string | undefined;
 let downloadRevision = 0;
 let downloadTimer: ReturnType<typeof setInterval> | undefined;
+let offerRevision: number | undefined;
+let offerVisible = false;
+let offerHovered = false;
+let offerFocused = false;
+let offerTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleOfferDismiss() {
+  clearTimeout(offerTimer);
+  if (!offerVisible || offerHovered || offerFocused || downloadPending) return;
+  offerTimer = setTimeout(() => { offerVisible = false; renderOffer(); }, 6000);
+}
+function renderOffer() {
+  const visible = offerVisible && !!downloadState?.offer && connected && clipboardEnabled && !handoff && !closing && downloadState?.transfer?.state !== 'running';
+  element('download-offer').hidden = !visible;
+  if (!visible) { offerHovered = false; offerFocused = false; }
+  const button = element<HTMLButtonElement>('download');
+  button.hidden = !visible;
+  button.disabled = !visible || downloadPending;
+  button.textContent = t(downloadPending ? 'download.selecting' : 'download.action');
+  element('download-summary').textContent = t('download.summary', { count: downloadState?.offer?.count ?? 0 });
+  if (!connected || !clipboardEnabled || handoff || closing) { offerVisible = false; clearTimeout(offerTimer); }
+}
+function updateOffer() {
+  const revision = downloadState?.offer?.revision;
+  if (revision !== offerRevision) {
+    offerRevision = revision;
+    offerVisible = revision !== undefined;
+    scheduleOfferDismiss();
+  }
+  renderOffer();
+}
 function downloadLabel() {
   const task = downloadState?.transfer;
-  return task?.state === 'running' ? t('download.progress', { bytes: formatBytes(task.bytes), total: task.total === null ? '…' : formatBytes(task.total) }) : t('download.action', { count: downloadState?.offer?.count ?? 0 });
+  if (task?.state === 'running') return t('download.progress', { bytes: formatBytes(task.bytes), total: task.total === null ? '…' : formatBytes(task.total) });
+  if (downloadPending) return t('download.selecting');
+  return t('download.action');
 }
 function formatBytes(bytes: number) { return bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / 1048576).toFixed(1)} MiB`; }
 function renderDownload() {
+  renderOffer();
   const task = downloadState?.transfer;
   const visible = !!downloadIssue || (!!task && task.id !== dismissedDownload);
   element('download-status').hidden = !visible;
@@ -114,10 +147,10 @@ async function refreshDownload() {
   const revision = downloadRevision;
   const current = session;
   if (!current || !connectionProfile?.clipboardSupport) {
-    if (downloadState || downloadSession) { downloadState = null; downloadSession = ''; renderDownload(); }
+    if (downloadState || downloadSession) { downloadState = null; downloadSession = ''; offerRevision = undefined; offerVisible = false; clearTimeout(offerTimer); renderDownload(); }
     return;
   }
-  if (downloadSession !== current.id) { downloadState = null; downloadSession = current.id; downloadIssue = undefined; dismissedDownload = ''; renderDownload(); }
+  if (downloadSession !== current.id) { downloadState = null; offerRevision = undefined; offerVisible = false; clearTimeout(offerTimer); downloadSession = current.id; downloadIssue = undefined; dismissedDownload = ''; renderDownload(); }
   if (!connected) {
     if (downloadState?.transfer?.state === 'running') { downloadState.transfer.state = 'failed'; downloadState.transfer.error = 'RDP_SESSION_CLOSED'; renderDownload(); }
     return;
@@ -127,7 +160,7 @@ async function refreshDownload() {
     const result = await window.anas.backend.call('downloadStatus', { owner, id: current.id }) as DownloadState | null;
     if (session !== current || closing || handoff || revision !== downloadRevision) return;
     if (JSON.stringify(result) === JSON.stringify(downloadState)) return;
-    downloadState = result; renderDownload(); presentation();
+    downloadState = result; updateOffer(); renderDownload(); presentation();
   } catch {
     if (session === current && revision === downloadRevision && downloadState?.transfer?.state === 'running') {
       downloadState.transfer.state = 'failed'; downloadState.transfer.error = 'RDP_SESSION_CLOSED'; renderDownload();
@@ -137,16 +170,16 @@ async function refreshDownload() {
 async function startDownload() {
   const current = session, offer = downloadState?.offer;
   if (!current || !offer || downloadPending || downloadState?.transfer?.state === 'running' || handoff || closing || !connected) return;
-  downloadPending = true; downloadIssue = undefined; ++downloadRevision; presentation();
+  downloadPending = true; clearTimeout(offerTimer); downloadIssue = undefined; ++downloadRevision; presentation();
   try {
     if (!window.anas.selectDirectory) throw new Error('RDP_DOWNLOAD_HOST');
     const directory = await window.anas.selectDirectory({ title: t('download.select_directory') });
     if (!directory || session !== current || handoff || closing || !connected) return;
     const result = await window.anas.backend.call('downloadStart', { owner, id: current.id, revision: offer.revision, directory }) as DownloadState;
-    if (session === current && !closing) { downloadState = result; dismissedDownload = ''; }
+    if (session === current && !closing) { downloadState = result; offerVisible = false; dismissedDownload = ''; }
   } catch (error) {
     if (!closing && session === current) downloadIssue = String(error);
-  } finally { downloadPending = false; if (!closing) { renderDownload(); presentation(); } }
+  } finally { downloadPending = false; if (!closing) { scheduleOfferDismiss(); renderDownload(); presentation(); } }
 }
 
 let clipboardErrorSeen = '';
@@ -440,7 +473,6 @@ function connectionActions(windowActions = false): Toolbar['actions'] {
   return [
     { id: 'ui-lock', label: t(uiLocked ? 'actions.unlock_ui' : 'actions.lock_ui'), icon: uiLocked ? 'assets/lock.svg' : 'assets/lock-open.svg', pressed: uiLocked, disabled: !connected || uiLockPending || handoff || !ready },
     ...(connectionProfile?.clipboardSupport ? [{ id: 'clipboard', label: clipboardState === 'initializing' ? t('clipboard.initializing') : clipboardEnabled ? `${t('actions.disable_clipboard')} · ${t('clipboard.' + clipboardState)}` : t('actions.enable_clipboard'), icon: 'assets/clipboard.svg', pressed: clipboardEnabled, disabled: !connected || clipboardState === 'initializing' || clipboardPending || handoff || !ready }] : []),
-    ...(connected && clipboardEnabled && (downloadState?.offer || downloadState?.transfer?.state === 'running') ? [{ id: 'download', label: downloadLabel(), icon: 'assets/download.svg', disabled: downloadPending || downloadState.transfer?.state === 'running' || handoff || !ready }] : []),
     { id: 'reset-input', label: t('actions.reset_input'), icon: 'assets/input-reset.svg', disabled: !connected || inputResetPending || handoff || !ready },
     { id: 'input-text', label: t('actions.input_text'), icon: 'assets/input-text.svg', disabled: !connected || uiLocked || handoff || !ready },
     { id: 'local-ime', label: t('actions.use_local_ime'), icon: 'assets/local-ime.svg', pressed: connectionProfile?.localIme ?? false, disabled: !connected || uiLocked || handoff || !ready || localImePending },
@@ -479,7 +511,7 @@ function presentation() {
   element('connection-header').hidden = instanceId !== 'main' && location === 'window' && toolbarReady;
   element('connection-name').hidden = !element('connection-header').hidden;
   element('move-window').toggleAttribute('hidden', instanceId === 'main' || location !== 'sidebar');
-  element('download').toggleAttribute('hidden', !connected || !clipboardEnabled || (!downloadState?.offer && downloadState?.transfer?.state !== 'running'));
+  renderOffer();
   element('resolution-menu').toggleAttribute('hidden', instanceId === 'main' || !connected || !dynamicResolutionAvailable());
   element('fit-window').toggleAttribute('hidden', instanceId === 'main' || location !== 'window' || (!adaptiveEnabled() && windowFitReady) || !!dynamicResolutionAvailable());
   for (const action of connectionActions()) {
@@ -1105,6 +1137,10 @@ async function moveProfile(id: string, direction: -1 | 1) {
 for (const [id, direction] of [['up', -1], ['down', 1]] as const) element(id).addEventListener('click', () => {
   if (selected) void moveProfile(selected.id, direction);
 });
+element('download-offer').addEventListener('mouseenter', () => { offerHovered = true; clearTimeout(offerTimer); });
+element('download-offer').addEventListener('mouseleave', () => { offerHovered = false; scheduleOfferDismiss(); });
+element('download-offer').addEventListener('focusin', () => { offerFocused = true; clearTimeout(offerTimer); });
+element('download-offer').addEventListener('focusout', event => { if (!element('download-offer').contains(event.relatedTarget as Node | null)) { offerFocused = false; scheduleOfferDismiss(); } });
 element('download').addEventListener('click', () => void startDownload());
 element('download-cancel').addEventListener('click', async () => {
   const current = session, task = downloadState?.transfer;
@@ -1205,7 +1241,7 @@ function disposePage() {
   adaptiveResolution.dispose();
   clearTimeout(windowStateTimer);
   closeContextMenu();
-  closing = true; releaseViewListener?.(); releasePointerLeaveListener?.(); releaseToolbarListener?.(); clearInterval(infoTimer); clearInterval(launchTimer); clearInterval(sessionTimer); clearInterval(downloadTimer);
+  closing = true; releaseViewListener?.(); releasePointerLeaveListener?.(); releaseToolbarListener?.(); clearInterval(infoTimer); clearInterval(launchTimer); clearInterval(sessionTimer); clearInterval(downloadTimer); clearTimeout(offerTimer);
   desktop?.dispose(); desktop = undefined;
 }
 window.addEventListener('pagehide', disposePage);
@@ -1362,7 +1398,6 @@ try {
     if (size) { await selectResolution(size); return; }
     if (id === 'adaptive-resolution') { await toggleAdaptive(); return; }
     if (id === 'fit-window') { if (connectionActions().some(action => action.id === id && !action.disabled)) await fitDesktopWindow(true); return; }
-    if (id === 'download') { void startDownload(); return; }
     if (id === 'clipboard') { await toggleClipboard(); return; }
     if (id === 'ui-lock') { await toggleUiLock(); return; }
     if (id === 'reset-input') { await resetInput(); return; }
