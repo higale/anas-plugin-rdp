@@ -216,96 +216,32 @@
             "foreground",
             "background",
             "closed"
-          ]
+          ],
+          "description": "closed cannot combine with location, ui_locked or reset_input. Supply state, ui_locked or reset_input."
         },
         "location": {
           "type": "string",
           "enum": [
             "sidebar",
             "window"
-          ]
+          ],
+          "description": "Only valid with state=foreground."
         },
         "ui_locked": {
           "type": "boolean"
         },
         "reset_input": {
           "type": "boolean",
-          "const": true
+          "enum": [
+            true
+          ],
+          "description": "Only true is accepted. Omit this field when no input reset is requested."
         }
       },
       "required": [
         "profile_id"
       ],
-      "additionalProperties": false,
-      "anyOf": [
-        {
-          "required": [
-            "state"
-          ]
-        },
-        {
-          "required": [
-            "ui_locked"
-          ]
-        },
-        {
-          "required": [
-            "reset_input"
-          ]
-        }
-      ],
-      "allOf": [
-        {
-          "if": {
-            "required": [
-              "location"
-            ]
-          },
-          "then": {
-            "required": [
-              "state"
-            ],
-            "properties": {
-              "state": {
-                "const": "foreground"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "required": [
-              "state"
-            ],
-            "properties": {
-              "state": {
-                "const": "closed"
-              }
-            }
-          },
-          "then": {
-            "not": {
-              "anyOf": [
-                {
-                  "required": [
-                    "location"
-                  ]
-                },
-                {
-                  "required": [
-                    "ui_locked"
-                  ]
-                },
-                {
-                  "required": [
-                    "reset_input"
-                  ]
-                }
-              ]
-            }
-          }
-        }
-      ]
+      "additionalProperties": false
     }
   },
   {
